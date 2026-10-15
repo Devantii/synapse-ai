@@ -618,3 +618,28 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 .cheers { list-style: none; padding: 0; margin: 12px 0 0; font-size: var(--step--1); color: var(--ink-2); display: grid; gap: 4px; }
 .cheers time { color: var(--ink-3); margin-left: 4px; }
 #bud-form { margin-top: 12px; }
+
+/* ---------- community safety ---------- */
+.rail a[hidden] { display: none; }
+.mod-menu { position: relative; display: inline-block; margin-left: auto; }
+.reply .mod-menu, .msg .who .mod-menu { margin-left: 4px; }
+.mod-menu summary { list-style: none; cursor: pointer; padding: 0 8px; border-radius: 8px; color: var(--ink-3); font-weight: 700; line-height: 1.6; }
+.mod-menu summary::-webkit-details-marker { display: none; }
+.mod-menu summary:hover, .mod-menu[open] summary { background: var(--surface-2); color: var(--ink); }
+.mod-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 180px; padding: 6px; border-radius: 12px; background: var(--surface); border: 1.5px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.15); display: grid; }
+.msg.mine .mod-pop { right: auto; left: 0; }
+.mod-pop button { background: none; border: 0; text-align: left; padding: 9px 10px; border-radius: 8px; font: inherit; font-size: var(--step--1); color: var(--ink); cursor: pointer; }
+.mod-pop button:hover { background: var(--surface-2); }
+.mod-pop button[data-mod="block"] { color: var(--berry); }
+.report-reasons { display: grid; gap: 6px; margin: 10px 0; }
+.radio { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 10px; cursor: pointer; }
+.radio input { width: 18px; height: 18px; min-height: 0; padding: 0; accent-color: var(--ink); }
+.mod-queue { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.mod-queue li.urgent { border-color: var(--berry); box-shadow: inset 4px 0 0 var(--berry); }
+.mod-queue header { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: var(--step--1); }
+.mod-queue header time { margin-left: auto; color: var(--ink-3); }
+.mod-queue blockquote { margin: 10px 0; padding: 10px 14px; border-left: 3px solid var(--line); background: var(--surface-2); border-radius: 0 10px 10px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--ink-2); }
+.pill.bad { background: color-mix(in srgb, var(--berry) 15%, var(--surface)); color: var(--berry); }
+.email-sheet { width: min(640px, 96vw); }
+.email-sheet iframe { width: 100%; height: min(70vh, 720px); border: 1.5px solid var(--line); border-radius: 12px; background: #EEF2F3; }

@@ -73,3 +73,25 @@ Common sites are pre-mapped (in `categories.js`) to Work, Study, Messaging & ema
 ## Publishing
 
 To distribute it beyond developer mode, zip this folder and submit it to the Chrome Web Store or Edge Add-ons. Their review requires a privacy policy; the Data section above is a good start.
+
+## Firefox
+
+The same extension builds for Firefox (115 or newer):
+
+```bash
+cd extension
+node build.mjs          # -> dist/synapse-firefox.zip and dist/synapse-chrome.zip
+```
+
+Ready-made zips are also attached to the **extension-latest** release on GitHub (rebuilt on every push to `main`, and checked with Mozilla's `web-ext lint`).
+
+**Try it now (until Firefox restarts):** open `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `dist/firefox/manifest.json` (or the zip).
+
+**Install it permanently:** regular Firefox only installs add-ons signed by Mozilla. Signing is free:
+1. Make an account on [addons.mozilla.org](https://addons.mozilla.org/developers/) → **Submit a New Add-on**.
+2. Choose **On your own** (unlisted, not shown in the store), upload `synapse-firefox.zip`.
+3. Automatic review usually takes minutes; download the signed `.xpi` and open it in Firefox.
+
+Choose **On this site** instead to list it publicly on addons.mozilla.org (a human review may follow).
+
+What differs from Chrome: the background runs as a classic script (bundled), options open in a tab, the "Back" button on the paused page opens a blank tab (Firefox doesn't let add-ons open its new-tab page), and the manifest declares the data it collects (`browsingActivity`: per-site minutes sent to your Synapse server).

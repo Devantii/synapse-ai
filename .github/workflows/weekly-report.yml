@@ -1,0 +1,32 @@
+# Sunday evening: wake the hosted server (free Render instances sleep) and send due weekly reports.
+# Set two repository secrets (Settings > Secrets and variables > Actions):
+#   SYNAPSE_URL  e.g. https://synapse-ai-xxxx.onrender.com
+#   CRON_SECRET  the same value as the CRON_SECRET environment variable on the server
+# Reports go out at 6 pm in each person's own time zone; running every 30 minutes covers every zone.
+name: Weekly email reports
+
+on:
+  schedule:
+    - cron: "*/30 * * * 0"   # every 30 minutes on Sundays (UTC)
+    - cron: "*/30 0-12 * * 1" # early Monday UTC = Sunday evening in the Americas
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger due reports
+        env:
+          SYNAPSE_URL: ${{ secrets.SYNAPSE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$SYNAPSE_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "SYNAPSE_URL / CRON_SECRET secrets not set; skipping."; exit 0
+          fi
+          # First request wakes a sleeping server; retry while it boots.
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS -m 60 -X POST -H "x-cron-key: $CRON_SECRET" "$SYNAPSE_URL/api/cron/weekly"; then echo; exit 0; fi
+            sleep 20
+          done
+          echo "Server did not respond"; exit 1

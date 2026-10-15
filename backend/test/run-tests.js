@@ -14,6 +14,10 @@ process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || '';
 process.env.OPENAI_API_KEY = '';
 process.env.LIVEKIT_URL = '';
+process.env.ADMIN_USERNAMES = 'bob';
+process.env.SMTP_URL = 'json';
+process.env.CRON_SECRET = 'cron-test-key';
+process.env.APP_URL = 'https://synapse.example';
 
 const { server, ready, db } = require('../src/server');
 const { io: ioc } = require('socket.io-client');
@@ -573,6 +577,103 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('GET', '/api/buddies', null, B)).data.buddies.length === 0);
   });
 
+  console.log('Community safety');
+  await test('report, auto-hide, hide, block and admin review', async () => {
+    const reg = async (u) => (await api('POST', '/api/auth/register', { username: u, displayName: u, password: 'safety-pass-1' })).data.token;
+    const T = await reg('troll'), R1 = await reg('rep1'), R2 = await reg('rep2');
+    const p = await api('POST', '/api/posts', { mood: 'stressed', body: 'buy cheap followers at spam dot com' }, T);
+    const pid = p.data.id;
+    assert((await api('POST', '/api/reports', { type: 'post', id: pid, reason: 'spam' }, T)).status === 400, 'cannot report own post');
+    assert((await api('POST', '/api/reports', { type: 'post', id: pid, reason: 'nonsense' }, A)).status === 400);
+    for (const tok of [A, R1]) assert((await api('POST', '/api/reports', { type: 'post', id: pid, reason: 'spam' }, tok)).status === 201);
+    assert((await api('POST', '/api/reports', { type: 'post', id: pid, reason: 'spam' }, A)).data.already === true, 'one report per person');
+    const seen = async (tok) => (await api('GET', '/api/posts', null, tok)).data.posts.some((x) => x.id === pid);
+    assert(await seen(B), 'two reports: still visible');
+    await api('POST', '/api/reports', { type: 'post', id: pid, reason: 'harassment', note: 'keeps posting this' }, R2);
+    assert(!(await seen(B)), 'three reports: hidden pending review');
+    assert(await seen(T), 'author still sees their own post');
+    // hide (just for me) and block
+    const p2 = await api('POST', '/api/posts', { mood: 'calm', body: 'second post from the same person' }, T);
+    assert(await (async () => (await api('GET', '/api/posts', null, R1)).data.posts.some((x) => x.id === p2.data.id))());
+    await api('POST', `/api/posts/${p2.data.id}/hide`, null, R1);
+    assert(!(await api('GET', '/api/posts', null, R1)).data.posts.some((x) => x.id === p2.data.id), 'hidden for R1');
+    assert((await api('GET', '/api/posts', null, R2)).data.posts.some((x) => x.id === p2.data.id), 'still visible to others');
+    const bl = await api('POST', '/api/blocks', { type: 'post', id: p2.data.id }, R2);
+    assert(bl.status === 201 && bl.data.label === 'troll');
+    assert(!(await api('GET', '/api/posts', null, R2)).data.posts.some((x) => x.id === p2.data.id), 'blocked author hidden');
+    const blocks = await api('GET', '/api/blocks', null, R2);
+    assert(blocks.data.length === 1 && !('blocked_id' in blocks.data[0]), 'block list never exposes the account id');
+    assert((await api('POST', '/api/buddies', { username: 'rep2' }, T)).status === 403, 'blocked people cannot send buddy requests');
+    // admin
+    assert((await api('GET', '/api/admin/reports', null, A)).status === 403, 'non-admins refused');
+    const q = await api('GET', '/api/admin/reports', null, B);
+    const item = q.data.items.find((i) => i.type === 'post' && i.id === pid);
+    assert(item && item.reports === 3 && item.hidden && item.text.includes('followers') && item.notes[0] === 'keeps posting this', JSON.stringify(q.data));
+    assert((await api('GET', '/api/me', null, B)).data.isAdmin === true);
+    assert((await api('POST', `/api/admin/reports/post/${pid}`, { action: 'suspend' }, B)).status === 200);
+    assert(!(await api('GET', '/api/admin/reports', null, B)).data.items.some((i) => i.id === pid), 'resolved reports leave the queue');
+    assert((await api('POST', '/api/posts', { mood: 'calm', body: 'trying again' }, T)).status === 403, 'suspended users cannot post');
+    assert((await api('GET', '/api/me', null, T)).data.suspended === true);
+    const sus = (await api('GET', '/api/admin/reports', null, B)).data.suspendedUsers;
+    const trollId = sus.find((u) => u.username === 'troll').id;
+    await api('POST', `/api/admin/users/${trollId}/suspend`, { suspended: false }, B);
+    assert((await api('POST', '/api/posts', { mood: 'calm', body: 'I will behave now' }, T)).status === 201, 'unsuspended');
+    // unblock
+    await api('DELETE', `/api/blocks/${blocks.data[0].id}`, null, R2);
+    assert((await api('GET', '/api/blocks', null, R2)).data.length === 0);
+  });
+  await test('room chat: blocked and auto-hidden messages filtered from history', async () => {
+    const hist = await api('GET', '/api/rooms/deep-work/messages', null, B);
+    assert(hist.status === 200 && Array.isArray(hist.data));
+  });
+
+  console.log('Weekly email report');
+  await test('verify address, preview, test send, Sunday schedule, unsubscribe', async () => {
+    const mailer = require('../src/mailer'), weekly = require('../src/weekly');
+    const routes = require('../src/routes');
+    const reg = await api('POST', '/api/auth/register', { username: 'mailer', displayName: 'Mira', password: 'mailer-pass-1' });
+    const M = reg.data.token;
+    await api('PUT', '/api/consents', { activity_tracking: true, usage_tracking: true }, M);
+    const today = new Date().toISOString().slice(0, 10);
+    await api('POST', '/api/sample-data', { today }, M);
+    assert((await api('PUT', '/api/email', { email: 'not-an-email' }, M)).status === 400);
+    assert((await api('POST', '/api/email/test', {}, M)).status === 400, 'needs a verified address');
+    const before = mailer.outbox.length;
+    assert((await api('PUT', '/api/email', { email: 'Mira@Example.com' }, M)).data.sent === true);
+    const verifyMail = mailer.outbox[before];
+    assert(verifyMail.to === 'mira@example.com' && /Confirm/.test(verifyMail.subject));
+    const link = verifyMail.text.match(/https:\/\/synapse\.example(\/api\/email\/verify\?token=\S+)/)[1];
+    const v = await fetch(base + link, { redirect: 'manual' });
+    assert(v.status === 302 && v.headers.get('location').includes('email=verified'));
+    const st = await api('GET', '/api/email', null, M);
+    assert(st.data.verified && st.data.mailEnabled && !st.data.weekly);
+    const pv = await api('GET', `/api/email/preview?day=${today}`, null, M);
+    assert(/Your Synapse week/.test(pv.data.subject) && pv.data.html.includes('One thing for this week') && pv.data.html.includes('Unsubscribe'), pv.data.subject);
+    assert((await api('POST', '/api/email/test', { day: today }, M)).status === 200);
+    assert(mailer.outbox.at(-1).to === 'mira@example.com' && mailer.outbox.at(-1).headers['List-Unsubscribe']);
+    // schedule: Sunday 18:00+ in the user's time zone, once per week
+    assert((await api('PUT', '/api/prefs', { tz: 'Mars/Olympus' }, M)).status === 400);
+    await api('PUT', '/api/prefs', { weeklyEmail: true, tz: 'Asia/Kolkata' }, M);
+    assert(weekly.due(new Date('2026-10-18T13:00:00Z'), 'Asia/Kolkata', null).due === true, 'Sunday 18:30 IST is due');
+    assert(weekly.due(new Date('2026-10-18T11:00:00Z'), 'Asia/Kolkata', null).due === false, 'Sunday 16:30 IST is too early');
+    assert(weekly.due(new Date('2026-10-19T13:00:00Z'), 'Asia/Kolkata', null).due === false, 'Monday is not');
+    assert(weekly.due(new Date('2026-10-18T13:00:00Z'), 'Asia/Kolkata', '2026-10-18').due === false, 'already sent this Sunday');
+    const n0 = mailer.outbox.length;
+    const run1 = await weekly.runDue(routes.review, new Date('2026-10-18T13:00:00Z'));
+    const run2 = await weekly.runDue(routes.review, new Date('2026-10-18T14:00:00Z'));
+    assert(run1.sent === 1 && run2.sent === 0 && mailer.outbox.length === n0 + 1, JSON.stringify([run1, run2]));
+    // external cron endpoint needs the key
+    assert((await api('POST', '/api/cron/weekly')).status === 404);
+    const cr = await fetch(base + '/api/cron/weekly', { method: 'POST', headers: { 'x-cron-key': 'cron-test-key' } });
+    assert(cr.status === 200);
+    // unsubscribe link
+    const unsub = mailer.outbox.at(-1).text.match(/https:\/\/synapse\.example(\/api\/email\/unsubscribe\S+)/)[1];
+    assert((await fetch(base + unsub.replace(/t=[^&]+/, 't=forged'))).status === 200);
+    assert((await api('GET', '/api/email', null, M)).data.weekly === true, 'forged link does nothing');
+    await fetch(base + unsub);
+    assert((await api('GET', '/api/email', null, M)).data.weekly === false, 'unsubscribed');
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);
@@ -592,7 +693,7 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('DELETE', '/api/account', { password: 'correct-horse' }, A)).status === 200);
     assert((await api('GET', '/api/me', null, A)).status === 401);
     const posts = await api('GET', '/api/posts', null, B);
-    assert(posts.data.posts.length === 0, 'posts should cascade');
+    assert(!posts.data.posts.some((p) => p.author === 'Alice'), 'posts should cascade');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

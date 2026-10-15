@@ -117,6 +117,8 @@ function attach(io) {
       if (!m?.roomId) return ack?.({ error: 'Join a room first.' });
       if (!text || text.length > 500) return ack?.({ error: 'Messages must be 1-500 characters.' });
       if (!allowMessage(socket.id)) return ack?.({ error: 'Slow down a little.' });
+      if ((await db.get('SELECT suspended FROM users WHERE id = ?', [m.userId]).catch(() => null))?.suspended)
+        return ack?.({ error: "Your account can't chat in rooms right now." });
       const roomId = m.roomId;
       let reply = null;
       if (replyTo != null) {

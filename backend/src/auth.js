@@ -36,4 +36,7 @@ function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { sign, verify, requireAuth };
+/** Stable keyed hash for links in emails (unsubscribe), tied to this server's secret. */
+const hmac = (value) => crypto.createHmac('sha256', SECRET).update(String(value)).digest('base64url').slice(0, 32);
+
+module.exports = { sign, verify, requireAuth, hmac };

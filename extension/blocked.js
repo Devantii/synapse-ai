@@ -36,7 +36,9 @@ function tick() {
 }
 tick();
 
-$('#back').addEventListener('click', () => (history.length > 2 ? history.go(-2) : chrome.tabs.update({ url: 'chrome://newtab/' })));
+// Firefox doesn't let extensions open its new-tab page, so fall back to a blank page there.
+$('#back').addEventListener('click', () => (history.length > 2 ? history.go(-2)
+  : chrome.tabs.update({ url: 'chrome://newtab/' }).catch(() => location.replace('about:blank'))));
 $('#allow').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'allowTemp', host });
   if (safeUrl) location.replace(safeUrl);

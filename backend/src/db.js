@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,                   -- '!' for Google-only accounts (no password)
   created_at    TEXT NOT NULL DEFAULT ${T.NOW},
   google_sub    TEXT,                            -- Google account id, when signed in with Google
-  email         TEXT
+  email         TEXT,
+  suspended     INTEGER NOT NULL DEFAULT 0,      -- set by an admin: can't post, reply or chat
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  email_token   TEXT                             -- pending verification link token
 );
 
 CREATE TABLE IF NOT EXISTS consents (
@@ -194,7 +197,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, done);
 CREATE TABLE IF NOT EXISTS user_prefs (
   user_id        INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   daily_goal_min INTEGER NOT NULL DEFAULT 120,
-  leaderboard    INTEGER NOT NULL DEFAULT 0     -- opt in to the weekly focus leaderboard
+  leaderboard    INTEGER NOT NULL DEFAULT 0,    -- opt in to the weekly focus leaderboard
+  weekly_email   INTEGER NOT NULL DEFAULT 0,    -- Sunday report by email
+  tz             TEXT,                          -- IANA time zone from the browser, for Sunday evening delivery
+  last_report_week TEXT                         -- local date of the Sunday the last report covered
 );
 
 -- Distraction log: tapped during a focus block ("what pulled you away?").
@@ -226,6 +232,36 @@ CREATE TABLE IF NOT EXISTS cheers (
   created_at TEXT NOT NULL DEFAULT ${T.NOW}
 );
 CREATE INDEX IF NOT EXISTS idx_cheers_to ON cheers(to_id, id);
+
+-- Community safety: reports, per-user hidden posts, blocks.
+CREATE TABLE IF NOT EXISTS reports (
+  id             ${T.ID},
+  reporter_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_type    TEXT NOT NULL CHECK (target_type IN ('post','reply','message')),
+  target_id      INTEGER NOT NULL,
+  target_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  reason         TEXT NOT NULL,
+  note           TEXT,
+  snapshot       TEXT NOT NULL,                 -- the reported text, kept for review even if edited/removed
+  status         TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','removed','dismissed')),
+  created_at     TEXT NOT NULL DEFAULT ${T.NOW},
+  resolved_at    TEXT,
+  UNIQUE (reporter_id, target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reports_target ON reports(target_type, target_id, status);
+CREATE TABLE IF NOT EXISTS hidden_posts (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, post_id)
+);
+CREATE TABLE IF NOT EXISTS blocks (
+  id         ${T.ID},
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label      TEXT NOT NULL,                     -- name shown in your block list ('Anonymous member' if they post anonymously)
+  created_at TEXT NOT NULL DEFAULT ${T.NOW},
+  UNIQUE (blocker_id, blocked_id)
+);
 
 -- Replies to community check-ins.
 CREATE TABLE IF NOT EXISTS post_replies (
@@ -353,6 +389,14 @@ async function migrate() {
   await addColumn('focus_sessions', 'sample', 'INTEGER NOT NULL DEFAULT 0');
   await addColumn('mood_checkins', 'sample', 'INTEGER NOT NULL DEFAULT 0');
   await addColumn('room_messages', 'reply_to', 'INTEGER');
+  // v1.7: moderation.
+  await addColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
+  // v1.8: weekly email report.
+  await addColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('users', 'email_token', 'TEXT');
+  await addColumn('user_prefs', 'weekly_email', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('user_prefs', 'tz', 'TEXT');
+  await addColumn('user_prefs', 'last_report_week', 'TEXT');
 
   // v1.3: device_tokens.kind also allows 'phone' (Android app).
   if (dialect === 'postgres') {

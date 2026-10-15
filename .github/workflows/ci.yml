@@ -102,3 +102,37 @@ jobs:
             --target "$GITHUB_SHA" --prerelease \
             --title "Synapse for Android (latest build)" \
             --notes "Built automatically from ${GITHUB_SHA::7}. On your phone: download synapse-android.apk, open it, and allow installing from this source. Then open Synapse, allow Usage access, and connect it from Synapse > Privacy > Connect Android phone."
+
+  extension:
+    name: Browser extension (Chrome + Firefox)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to publish the zips as a release
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build both versions
+        run: node build.mjs
+      - name: Lint the Firefox build (Mozilla web-ext, same checks as addons.mozilla.org)
+        run: npx --yes web-ext@8 lint -s dist/firefox --warnings-as-errors
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synapse-extension
+          path: |
+            extension/dist/synapse-chrome.zip
+            extension/dist/synapse-firefox.zip
+      - name: Publish "extension-latest" release (main branch only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete extension-latest --yes --cleanup-tag || true
+          gh release create extension-latest dist/synapse-chrome.zip dist/synapse-firefox.zip \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Synapse browser extension (latest build)" \
+            --notes "Built automatically from ${GITHUB_SHA::7}. Chrome/Edge: unzip synapse-chrome.zip, open chrome://extensions, turn on Developer mode, Load unpacked. Firefox: see extension/README.md (temporary install via about:debugging, or sign the zip for free on addons.mozilla.org)."

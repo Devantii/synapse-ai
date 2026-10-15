@@ -149,6 +149,7 @@ async function enterApp(isNew) {
   $('#auth').hidden = true;
   $('#app').hidden = false;
   $('#who').textContent = state.me.user.displayName;
+  $('#nav-admin').hidden = !state.me.isAdmin;
   connectSocket();
   foreground.sync();
   timer.broadcast(); // re-sync a timer that was running before a reload
@@ -160,6 +161,11 @@ async function enterApp(isNew) {
       try { await saveConsents($('#onboarding-form')); } catch (e) { fail(e); }
       route();
     }, { once: true });
+  }
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('email')) {
+    toast(qs.get('email') === 'verified' ? 'Email confirmed. You can turn on the weekly report now.' : 'That confirmation link has expired. Save your address again.', qs.get('email') === 'verified' ? 'win' : 'err');
+    history.replaceState(null, '', location.pathname + location.hash);
   }
   if (!location.hash) location.hash = '#/today';
   route();
@@ -822,10 +828,11 @@ async function renderRoom(main, roomId) {
     </div>`;
   const log = $('#chat-log');
   const addMsg = (m) => {
+    if (!m.isMine && state.me.blockedUserIds?.includes(m.userId)) return; // blocked: never shown
     const mine = m.isMine || m.userId === state.me.user.id;
     const quote = m.reply ? `<button class="quote" data-jump="${m.reply.id}"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</button>` : '';
     log.insertAdjacentHTML('beforeend', `<div class="msg ${mine ? 'mine' : ''}" data-mid="${m.id}" data-author="${esc(mine ? 'yourself' : m.author)}"><div class="who">${mine ? 'You' : esc(m.author)} · ${ago(m.created_at)}
-      <button class="link msg-reply" data-reply="${m.id}">Reply</button></div>${quote}<div class="bubble">${esc(m.body)}</div></div>`);
+      <button class="link msg-reply" data-reply="${m.id}">Reply</button>${mine ? '' : modMenu('message', m.id)}</div>${quote}<div class="bubble">${esc(m.body)}</div></div>`);
     log.scrollTop = log.scrollHeight;
   };
   let replyTo = null;
@@ -1254,6 +1261,150 @@ const mesh = {
 };
 let paintCall = null; // set by the open room page
 
+// ---------------------------------------------------------------- Community safety
+// "⋯" menu on other people's posts, replies and chat messages: report, hide (posts), block.
+function modMenu(type, id, canHide) {
+  return `<details class="mod-menu"><summary aria-label="More options">⋯</summary><div class="mod-pop">
+    <button type="button" data-mod="report" data-type="${type}" data-id="${id}">Report</button>
+    ${canHide ? `<button type="button" data-mod="hide" data-type="${type}" data-id="${id}">Hide this post</button>` : ''}
+    <button type="button" data-mod="block" data-type="${type}" data-id="${id}">Block this person</button></div></details>`;
+}
+const REPORT_REASONS = { spam: 'Spam or advertising', harassment: 'Harassment or bullying', hate: 'Hate or discrimination', selfharm: 'Self-harm or suicide risk', sexual: 'Sexual content', other: 'Something else' };
+function openReport(type, id) {
+  const dlg = $('#report-dialog'), form = $('#report-form');
+  form.reset();
+  $('.form-error', form).textContent = '';
+  $('#selfharm-note').hidden = true;
+  $('#report-reasons').innerHTML = Object.entries(REPORT_REASONS).map(([k, v]) => `<label class="radio"><input type="radio" name="reason" value="${k}" /> ${v}</label>`).join('');
+  form.onchange = () => { $('#selfharm-note').hidden = form.elements.reason.value !== 'selfharm'; };
+  $('#report-send').onclick = async (e) => {
+    e.preventDefault();
+    const reason = form.elements.reason.value;
+    if (!reason) { $('.form-error', form).textContent = 'Pick a reason.'; return; }
+    try {
+      const r = await api('POST', '/reports', { type, id, reason, note: form.elements.note.value.trim() || undefined });
+      dlg.close();
+      toast(r.already ? 'You already reported this. Thanks.' : 'Thanks. The admins will review it.');
+    } catch (err) { $('.form-error', form).textContent = err.message; }
+  };
+  dlg.showModal();
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-mod]');
+  if (!b) return;
+  b.closest('details')?.removeAttribute('open');
+  const { mod, type } = b.dataset, id = +b.dataset.id;
+  if (mod === 'report') return openReport(type, id);
+  try {
+    if (mod === 'hide') {
+      await api('POST', `/posts/${id}/hide`);
+      b.closest('.post')?.remove();
+      toast('Post hidden. You can show hidden posts again in Privacy.');
+    }
+    if (mod === 'block') {
+      if (!confirm("Block this person? You won't see their posts, replies or chat messages, and they can't add you as a buddy. They aren't told.")) return;
+      const r = await api('POST', '/blocks', { type, id });
+      state.me = await api('GET', '/me');
+      toast(`Blocked ${r.label}.`);
+      route();
+    }
+  } catch (err) { fail(err); }
+});
+
+// Weekly email report settings (Privacy page).
+async function renderEmail() {
+  const el = $('#email-panel');
+  if (!el) return;
+  const e = await api('GET', '/email');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  el.innerHTML = `<h2 style="font-size:var(--step-1)">Weekly email report</h2>
+    <p class="muted" style="font-size:var(--step--1)">Every Sunday evening: your focus hours, screen-time trend day by day, and one suggestion for the week. Only to an address you've confirmed; unsubscribe from any email.</p>
+    ${e.mailEnabled ? '' : '<p class="note" style="margin:8px 0">Email isn\'t set up on this server yet, so reports can\'t be sent. You can still preview yours. (Admin: set SMTP_URL and MAIL_FROM.)</p>'}
+    <form id="email-form" class="task-form"><input name="email" type="email" value="${esc(e.email || '')}" placeholder="you@example.com" autocomplete="email" aria-label="Email address" ${e.mailEnabled ? '' : 'disabled'} />
+      <button class="btn" ${e.mailEnabled ? '' : 'disabled'}>${e.email ? 'Change' : 'Save'}</button></form>
+    ${e.email ? `<p style="font-size:var(--step--1);margin:6px 0 0">${e.verified ? '<span class="chg good">✓</span> Confirmed' : e.pending ? 'Check your inbox for a confirmation link (and spam).' : 'Not confirmed yet.'}</p>` : ''}
+    <label class="switch"><strong>Send me the weekly report</strong><p>Sunday around 6 pm your time (${esc(tz)}).</p>
+      <input type="checkbox" id="weekly-on" ${e.weekly ? 'checked' : ''} ${e.verified && e.mailEnabled ? '' : 'disabled'} /></label>
+    <div class="row-btns" style="margin-top:12px"><button class="btn" id="email-preview">Preview this week's email</button>
+      ${e.verified && e.mailEnabled ? '<button class="btn" id="email-test">Send me one now</button>' : ''}</div>`;
+  el.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try { await api('PUT', '/email', { email: ev.target.elements.email.value }); toast('Sent a confirmation link. Check your inbox.'); renderEmail(); } catch (err) { fail(err); }
+  };
+  el.onchange = async (ev) => {
+    if (ev.target.id !== 'weekly-on') return;
+    try { state.me.prefs = await api('PUT', '/prefs', { weeklyEmail: ev.target.checked, tz }); toast(ev.target.checked ? 'Weekly report on. See you Sunday.' : 'Weekly report off'); } catch (err) { fail(err); }
+  };
+  el.onclick = async (ev) => {
+    try {
+      if (ev.target.id === 'email-test') { const r = await api('POST', '/email/test', { day: localDay() }); toast(`Sent: "${r.subject}"`); }
+      if (ev.target.id === 'email-preview') {
+        const r = await api('GET', `/email/preview?day=${localDay()}`);
+        let d = $('#email-preview-dialog');
+        if (!d) { d = document.createElement('dialog'); d.id = 'email-preview-dialog'; d.className = 'sheet email-sheet'; document.body.append(d); }
+        d.innerHTML = `<form method="dialog"><h2 style="font-size:var(--step-1)">${esc(r.subject)}</h2><iframe title="Email preview" sandbox></iframe>
+          <div class="sheet-actions"><button class="btn primary">Close</button></div></form>`;
+        $('iframe', d).srcdoc = r.html;
+        d.showModal();
+      }
+    } catch (err) { fail(err); }
+  };
+}
+
+async function renderBlocked() {
+  const el = $('#blocked-panel');
+  if (!el) return;
+  const rows = await api('GET', '/blocks');
+  el.innerHTML = `<h2 style="font-size:var(--step-1)">Blocked people</h2>
+    <p class="muted" style="font-size:var(--step--1)">You don't see their posts, replies or chat messages, and they can't send you buddy requests. They aren't told.</p>
+    ${rows.length ? `<div class="divided">${rows.map((r) => `<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><span><b>${esc(r.label)}</b><br><small>since ${ago(r.created_at)}</small></span><button class="btn" data-unblock="${r.id}">Unblock</button></div>`).join('')}</div>`
+      : '<p class="empty" style="margin:0">Nobody blocked.</p>'}
+    <button class="link" id="unhide" style="margin-top:10px">Show posts I hid again</button>`;
+  el.onclick = async (e) => {
+    try {
+      const u = e.target.closest('[data-unblock]');
+      if (u) { await api('DELETE', `/blocks/${u.dataset.unblock}`); state.me = await api('GET', '/me'); toast('Unblocked'); renderBlocked(); }
+      if (e.target.id === 'unhide') { await api('DELETE', '/hidden-posts'); toast('Hidden posts will show again'); }
+    } catch (err) { fail(err); }
+  };
+}
+
+VIEWS.admin = async (main, arg) => {
+  if (!state.me.isAdmin) { main.innerHTML = '<p class="empty">Admins only.</p>'; return; }
+  const status = ['open', 'removed', 'dismissed'].includes(arg) ? arg : 'open';
+  const q = await api('GET', `/admin/reports?status=${status}`);
+  const TYPE = { post: 'Community post', reply: 'Reply', message: 'Room chat message' };
+  main.innerHTML = `
+    <div class="page-head"><div><h1>Moderation</h1><p>Reported content, most urgent first. Anything with ${q.autoHideAt}+ open reports is already hidden from everyone except its author until you decide.</p></div></div>
+    <div class="chips" style="margin-bottom:16px">${['open', 'removed', 'dismissed'].map((s) => `<a class="chip" href="#/admin/${s}" aria-pressed="${s === status}">${s[0].toUpperCase() + s.slice(1)}</a>`).join('')}</div>
+    ${q.items.length ? `<ul class="mod-queue">${q.items.map((i) => `
+      <li class="panel ${i.urgent ? 'urgent' : ''}">
+        <header><b>${TYPE[i.type]}</b> by <b>${esc(i.author)}</b>${i.username ? ` <span class="muted">@${esc(i.username)}</span>` : ''}${i.suspended ? ' <span class="pill bad">suspended</span>' : ''}
+          ${i.hidden ? '<span class="pill">auto-hidden</span>' : ''}${i.urgent ? '<span class="pill bad">possible self-harm: check first</span>' : ''}<time>${ago(i.lastAt)}</time></header>
+        <blockquote>${esc(i.text)}</blockquote>
+        <p class="muted" style="margin:0 0 8px">${i.reports} ${i.reports === 1 ? 'report' : 'reports'}: ${i.reasons.map((r) => `${esc(r.label)} (${r.n})`).join(', ')}${i.notes.length ? `<br>Notes: ${i.notes.map((n) => `"${esc(n)}"`).join(' · ')}` : ''}</p>
+        ${status === 'open' ? `<div class="row-btns"><button class="btn" data-adm="dismiss" data-t="${i.type}" data-i="${i.id}">Keep it</button>
+          <button class="btn danger" data-adm="remove" data-t="${i.type}" data-i="${i.id}">Remove</button>
+          ${i.userId && !i.suspended ? `<button class="btn danger" data-adm="suspend" data-t="${i.type}" data-i="${i.id}">Remove and suspend author</button>` : ''}</div>` : ''}
+      </li>`).join('')}</ul>` : `<p class="empty">Nothing ${status === 'open' ? 'to review. Quiet is good' : 'here'}.</p>`}
+    <section class="panel" style="margin-top:20px"><h2 style="font-size:var(--step-1)">Suspended accounts</h2>
+      ${q.suspendedUsers.length ? `<div class="divided">${q.suspendedUsers.map((u) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><span><b>${esc(u.display_name)}</b> <span class="muted">@${esc(u.username)}</span></span><button class="btn" data-unsuspend="${u.id}">Lift suspension</button></div>`).join('')}</div>`
+        : '<p class="empty" style="margin:0">None.</p>'}
+      <p class="muted" style="font-size:var(--step--1)">Suspended people can still use their own timer and data, but can't post, reply, chat or send cheers.</p></section>`;
+  main.onclick = async (e) => {
+    const b = e.target.closest('[data-adm],[data-unsuspend]');
+    if (!b) return;
+    try {
+      if (b.dataset.unsuspend) await api('POST', `/admin/users/${b.dataset.unsuspend}/suspend`, { suspended: false });
+      else {
+        if (b.dataset.adm === 'suspend' && !confirm('Remove this and suspend the author?')) return;
+        await api('POST', `/admin/reports/${b.dataset.t}/${b.dataset.i}`, { action: b.dataset.adm });
+      }
+      toast('Done'); route();
+    } catch (err) { fail(err); }
+  };
+};
+
 // ---------------------------------------------------------------- Community
 VIEWS.community = async (main) => {
   const MOOD_WORDS = { calm: 'Calm', focused: 'Focused', proud: 'Proud', tired: 'Tired', stressed: 'Stressed', hopeful: 'Hopeful' };
@@ -1275,6 +1426,7 @@ VIEWS.community = async (main) => {
           <button class="btn primary wide">Post check-in</button>
         </form>
         <p class="muted" style="margin-top:12px;font-size:var(--step--1)">Posting as <b>${state.me.consents.community_profile ? esc(state.me.user.displayName) : 'Anonymous member'}</b>. Change this in <a href="#/privacy">Privacy</a>.</p>
+        ${state.me.suspended ? '<p class="warn-banner high" style="margin-top:12px">Your account can\'t post, reply or chat right now. Contact the site admin if you think this is a mistake.</p>' : ''}
         <div class="buddies" id="buddies"></div>
       </aside>
     </div>`;
@@ -1284,12 +1436,12 @@ VIEWS.community = async (main) => {
       <p>${esc(p.body)}</p>
       <div class="reacts">${Object.entries(RX).map(([k, label]) => `<button class="react" data-react="${k}" aria-pressed="${p.reactions[k].mine}">${label}${p.reactions[k].count ? ` <span class="num">${p.reactions[k].count}</span>` : ''}</button>`).join('')}
       <button class="react" data-reply-toggle>Reply${p.replies.length ? ` <span class="num">${p.replies.length}</span>` : ''}</button>
-      ${p.isMine ? `<button class="link" data-delete style="margin-left:auto;font-size:13px">Delete</button>` : ''}</div>
+      ${p.isMine ? `<button class="link" data-delete style="margin-left:auto;font-size:13px">Delete</button>` : modMenu('post', p.id, true)}</div>
       <div class="replies" ${p.replies.length ? '' : 'hidden'}>${p.replies.map(replyHtml).join('')}</div>
       <form class="reply-form" hidden><label class="sr" style="position:absolute;left:-999px">Reply</label>
         <input name="body" maxlength="400" autocomplete="off" placeholder="Write a kind reply" required /><button class="btn primary">Reply</button></form></li>`;
   const replyHtml = (r) => `<div class="reply" data-rid="${r.id}"><b>${esc(r.author)}${r.isMine ? ' (you)' : ''}</b> <time>${ago(r.created_at)}</time>
-      ${r.isMine ? '<button class="link" data-reply-delete>Delete</button>' : ''}<p>${esc(r.body)}</p></div>`;
+      ${r.isMine ? '<button class="link" data-reply-delete>Delete</button>' : modMenu('reply', r.id)}<p>${esc(r.body)}</p></div>`;
   async function load(reset) {
     const r = await api('GET', `/posts?limit=15${!reset && oldest ? `&before=${oldest}` : ''}`);
     if (reset) feed.innerHTML = '';
@@ -1978,6 +2130,8 @@ VIEWS.privacy = async (main) => {
             <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap" id="google-link-row"><div><b>Google</b><br><small>${state.me.user.google ? `Linked${state.me.user.email ? ` as ${esc(state.me.user.email)}` : ''}` : state.me.googleClientId ? 'Not linked. Link it to sign in with one tap.' : "Not available on this server."}</small></div>
               ${state.me.user.google ? (state.me.user.hasPassword ? '<button class="btn" id="google-unlink">Unlink</button>' : '') : state.me.googleClientId ? '<div id="google-link-btn"></div>' : ''}</div>
           </div></section>
+        <section class="panel" id="email-panel"><h2 style="font-size:var(--step-1)">Weekly email report</h2><p class="muted">Loading…</p></section>
+        <section class="panel" id="blocked-panel"><h2 style="font-size:var(--step-1)">Blocked people</h2><p class="muted">Loading…</p></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Delete account</h2><p>Permanently removes your account and all of the data above. This can't be undone.</p>
           <button class="btn danger" id="del-account">Delete my account</button></section>
       </div>
@@ -2089,6 +2243,8 @@ VIEWS.privacy = async (main) => {
     try { await api('DELETE', '/account/google'); toast('Google unlinked'); state.me = await api('GET', '/me'); route(); }
     catch (err) { fail(err); }
   });
+  renderBlocked();
+  renderEmail();
   const dlg = $('#del-dialog');
   $('#del-account').addEventListener('click', () => { $('.form-error', dlg).textContent = ''; dlg.showModal(); });
   $('#del-confirm').addEventListener('click', async (e) => {

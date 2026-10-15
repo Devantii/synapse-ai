@@ -38,3 +38,14 @@ services:
       # Optional: "Continue with Google". Paste your OAuth client ID in the Render dashboard.
       - key: GOOGLE_CLIENT_ID
         sync: false
+      # Optional: community moderation. Comma-separated usernames that get the Admin page.
+      - key: ADMIN_USERNAMES
+        sync: false
+      # Optional: weekly email reports. SMTP_URL like smtps://USER:PASS@smtp-relay.brevo.com:465
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      # Lets the "Weekly email reports" GitHub workflow trigger sends (copy it into the repo secret CRON_SECRET).
+      - key: CRON_SECRET
+        generateValue: true

@@ -54,6 +54,16 @@
     </section>
   </div>
 
+  <!-- Report content -->
+  <dialog id="report-dialog" class="sheet"><form method="dialog" id="report-form">
+    <h2>Report this</h2><p class="muted">Reports go to the site's admins. The person isn't told who reported them.</p>
+    <div class="report-reasons" id="report-reasons"></div>
+    <label class="field">Anything else? <small>Optional</small><textarea name="note" maxlength="300" rows="2"></textarea></label>
+    <p class="note" id="selfharm-note" hidden><strong>If someone may be in danger right now,</strong> contact local emergency services. In India you can call Tele-MANAS on 14416 (free, 24/7). Reporting also flags this for the admins first.</p>
+    <p class="form-error" role="alert"></p>
+    <div class="sheet-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn danger" value="send" id="report-send">Send report</button></div>
+  </form></dialog>
+
   <!-- Onboarding consent (shown after first signup) -->
   <dialog id="onboarding" class="sheet">
     <form method="dialog" id="onboarding-form">
@@ -75,6 +85,7 @@
       <a href="#/progress" data-nav="progress"><svg><use href="#i-progress" /></svg><span>Progress</span></a>
       <a href="#/insights" data-nav="insights"><svg><use href="#i-insight" /></svg><span>Insights</span></a>
       <a href="#/garden" data-nav="garden"><svg><use href="#i-tree" /></svg><span>Garden</span></a>
+      <a href="#/admin" data-nav="admin" id="nav-admin" class="rail-low" hidden><svg><use href="#i-flag" /></svg><span>Admin</span></a>
       <a href="#/privacy" data-nav="privacy" class="rail-low"><svg><use href="#i-lock" /></svg><span>Privacy</span></a>
       <div class="rail-user">
         <button class="btn quiet" id="install" hidden>Install app</button>
@@ -102,6 +113,7 @@
       <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
       <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M9 9V6a3 3 0 0 1 6 0v5M15 13.5A3 3 0 0 1 9 11M5.5 11a6.5 6.5 0 0 0 10.6 5M18.5 11c0 .8-.1 1.5-.4 2.2M12 17.5V21M4 4l16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <symbol id="i-cam" viewBox="0 0 24 24"><rect x="3" y="6.5" width="12.5" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 10.5l5-3v9l-5-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
       <symbol id="i-cam-off" viewBox="0 0 24 24"><path d="M8 6.5h5.3a2.2 2.2 0 0 1 2.2 2.2v4M15.5 15.3a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 15.3V8.7c0-.9.5-1.6 1.2-2M15.5 10.5l5-3v9l-3-1.8M3 3l18 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>

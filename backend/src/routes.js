@@ -10,6 +10,12 @@ const devices = require('./devices');
 const voice = require('./voice');
 const google = require('./google');
 const sample = require('./sample');
+const safety = require('./safety');
+const mailer = require('./mailer');
+const weekly = require('./weekly');
+const { hmac } = require('./auth');
+const crypto = require('crypto');
+let ext = null; // extras (set below), used by the weekly email
 const { dedupe, appKey, SOURCE_LABEL } = require('./usage');
 const sessions = require('./sessions');
 
@@ -136,8 +142,8 @@ post('/auth/google', authLimiter, async (req, res) => {
   for (let attempt = 0; ; attempt++) {
     const username = await freeUsername(g);
     try {
-      id = await db.insert('INSERT INTO users (username, display_name, password_hash, google_sub, email) VALUES (?, ?, ?, ?, ?)',
-        [username, displayName, '!', g.sub, g.emailVerified ? g.email : null]);
+      id = await db.insert('INSERT INTO users (username, display_name, password_hash, google_sub, email, email_verified) VALUES (?, ?, ?, ?, ?, ?)',
+        [username, displayName, '!', g.sub, g.emailVerified ? g.email : null, g.emailVerified ? 1 : 0]);
       break;
     } catch (e) {
       if (!/unique|duplicate/i.test(e.message) || attempt > 3) throw e;
@@ -149,6 +155,31 @@ post('/auth/google', authLimiter, async (req, res) => {
   user = await db.get('SELECT * FROM users WHERE id = ?', [id]);
   res.status(201).json({ ...authReply(user), created: true });
 });
+
+// ---------- weekly email: public links ----------
+router.get('/email/verify', wrap(async (req, res) => {
+  const token = String(req.query.token || '');
+  const u = token.length >= 20 ? await db.get('SELECT id FROM users WHERE email_token = ?', [token]) : null;
+  if (!u) return res.redirect('/?email=invalid#/privacy');
+  await db.run('UPDATE users SET email_verified = 1, email_token = NULL WHERE id = ?', [u.id]);
+  res.redirect('/?email=verified#/privacy');
+}));
+router.get('/email/unsubscribe', wrap(async (req, res) => {
+  const id = parseInt(req.query.u, 10);
+  const ok = Number.isInteger(id) && String(req.query.t || '') === hmac(`unsub:${id}`);
+  if (ok) await db.run('UPDATE user_prefs SET weekly_email = 0 WHERE user_id = ?', [id]);
+  res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width"><title>Synapse</title>
+    <body style="font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;color:#1C2A33">
+    <h1>${ok ? "You're unsubscribed" : 'That link did not work'}</h1>
+    <p>${ok ? "You won't get the weekly report any more. Turn it back on any time in Synapse &gt; Privacy." : 'Open Synapse &gt; Privacy to change email settings.'}</p>
+    <p><a href="/#/privacy">Open Synapse</a></p></body>`);
+}));
+// External scheduler (e.g. the GitHub Actions workflow) wakes a sleeping server and sends due reports.
+router.post('/cron/weekly', wrap(async (req, res) => {
+  const key = process.env.CRON_SECRET;
+  if (!key || req.get('x-cron-key') !== key) return res.status(404).json({ error: 'Not found.' });
+  res.json(await weekly.runDue(ext.review));
+}));
 
 router.get('/health', (req, res) => res.json({ ok: true, db: db.dialect, llm: coach.llmEnabled, voice: voice.enabled ? 'livekit' : 'mesh' }));
 
@@ -163,6 +194,9 @@ get('/me', async (req, res) => {
       hasPassword: hasPassword(u), google: !!u.google_sub, email: u.email || null },
     googleClientId: google.enabled ? google.clientId : null,
     hasSampleData: await sample.has(u.id),
+    isAdmin: safety.isAdmin(u.username),
+    suspended: await safety.suspended(u.id),
+    blockedUserIds: (await db.all('SELECT blocked_id FROM blocks WHERE blocker_id = ?', [u.id])).map((r) => r.blocked_id),
     prefs: await prefs(u.id),
     consents: await consents(u.id),
     rewards: await game.summary(u.id),
@@ -436,9 +470,10 @@ const MOODS = ['calm', 'focused', 'proud', 'tired', 'stressed', 'hopeful'];
 const REACTIONS = ['cheer', 'hug', 'same'];
 
 async function feed(userId, limit, beforeId) {
-  const params = [];
-  let where = '';
-  if (beforeId) { where = 'WHERE p.id < ?'; params.push(beforeId); }
+  const vis = safety.visible('p', 'post', userId, { hiddenPosts: true });
+  const params = [...vis.params];
+  let where = `WHERE ${vis.sql}`;
+  if (beforeId) { where += ' AND p.id < ?'; params.push(beforeId); }
   params.push(limit);
   const rows = await db.all(
     `SELECT p.id, p.mood, p.body, p.created_at, p.user_id,
@@ -469,8 +504,8 @@ async function repliesFor(userId, postIds) {
     `SELECT r.id, r.post_id, r.body, r.created_at, r.user_id,
             CASE WHEN c.community_profile = 0 THEN 'Anonymous member' ELSE u.display_name END AS author
        FROM post_replies r JOIN users u ON u.id = r.user_id LEFT JOIN consents c ON c.user_id = r.user_id
-      WHERE r.post_id IN (${postIds.map(() => '?').join(',')}) ORDER BY r.id`,
-    postIds
+      WHERE r.post_id IN (${postIds.map(() => '?').join(',')}) AND ${safety.visible('r', 'reply', userId).sql} ORDER BY r.id`,
+    [...postIds, ...safety.visible('r', 'reply', userId).params]
   );
   return rows.map(({ user_id, ...r }) => ({ ...r, isMine: user_id === userId }));
 }
@@ -482,7 +517,11 @@ get('/posts', async (req, res) => {
 });
 
 const postLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 10, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
+const notSuspended = async (req) => {
+  if (await safety.suspended(req.user.id)) throw new HttpError(403, "Your account can't post in the community right now. Contact the site admin if you think this is a mistake.");
+};
 post('/posts', postLimiter, async (req, res) => {
+  await notSuspended(req);
   const mood = MOODS.includes(req.body.mood) ? req.body.mood : null;
   if (!mood) throw new HttpError(400, 'Pick a mood.');
   const body = text(req.body.body, 'Check-in', 2, 500);
@@ -507,6 +546,7 @@ post('/posts/:id/react', async (req, res) => {
 // Replies to a check-in.
 const replyLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
 post('/posts/:id/replies', replyLimiter, async (req, res) => {
+  await notSuspended(req);
   const p = await db.get('SELECT id FROM posts WHERE id = ?', [intId(req.params.id)]);
   if (!p) throw new HttpError(404, 'Post not found.');
   const body = text(req.body.body, 'Reply', 1, 400);
@@ -537,8 +577,8 @@ get('/rooms/:id/messages', async (req, res) => {
             m.reply_to AS "replyId", pu.display_name AS "replyAuthor", p.body AS "replyBody"
        FROM room_messages m JOIN users u ON u.id = m.user_id
        LEFT JOIN room_messages p ON p.id = m.reply_to LEFT JOIN users pu ON pu.id = p.user_id
-      WHERE m.room_id = ? ORDER BY m.id DESC LIMIT 50`,
-    [req.user.id, String(req.params.id)]
+      WHERE m.room_id = ? AND ${safety.visible('m', 'message', req.user.id).sql} ORDER BY m.id DESC LIMIT 50`,
+    [req.user.id, String(req.params.id), ...safety.visible('m', 'message', req.user.id).params]
   );
   res.json(rows.reverse().map(({ replyId, replyAuthor, replyBody, ...m }) => ({
     ...m, reply: replyId ? { id: replyId, author: replyAuthor || 'Deleted message', body: replyBody ? String(replyBody).slice(0, 140) : '' } : null })));
@@ -586,6 +626,7 @@ get('/export', async (req, res) => {
     roomMessages: await q('SELECT room_id, body, created_at FROM room_messages WHERE user_id = ? ORDER BY id'),
     tasks: await q('SELECT title, estimate, blocks_done, done, day, done_day FROM tasks WHERE user_id = ? ORDER BY id'),
     preferences: await prefs(id),
+    email: (await db.get('SELECT email, email_verified FROM users WHERE id = ?', [id])),
     distractions: await q('SELECT day, at, kind, note FROM distractions WHERE user_id = ? ORDER BY id'),
     buddies: await db.all(`SELECT u.display_name AS name, b.status, b.created_at FROM buddies b JOIN users u
       ON u.id = CASE WHEN b.requester_id = ? THEN b.addressee_id ELSE b.requester_id END WHERE b.requester_id = ? OR b.addressee_id = ?`, [id, id, id]),
@@ -601,7 +642,7 @@ const DELETE_SCOPES = {
   activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
-  community: ['posts', 'post_replies', 'reactions', 'room_messages'],
+  community: ['posts', 'post_replies', 'reactions', 'room_messages', 'hidden_posts'],
 };
 del('/data', async (req, res) => {
   const scope = req.body.scope;
@@ -648,16 +689,22 @@ del('/tasks/:id', async (req, res) => {
 
 // ---------- preferences: daily goal, leaderboard ----------
 async function prefs(userId) {
-  const p = await db.get('SELECT daily_goal_min, leaderboard FROM user_prefs WHERE user_id = ?', [userId]);
-  return { dailyGoalMin: p ? p.daily_goal_min : 120, leaderboard: !!p?.leaderboard };
+  const p = await db.get('SELECT daily_goal_min, leaderboard, weekly_email, tz FROM user_prefs WHERE user_id = ?', [userId]);
+  return { dailyGoalMin: p ? p.daily_goal_min : 120, leaderboard: !!p?.leaderboard, weeklyEmail: !!p?.weekly_email, tz: p?.tz || null };
 }
 get('/prefs', async (req, res) => res.json(await prefs(req.user.id)));
 put('/prefs', async (req, res) => {
   const cur = await prefs(req.user.id);
   const goal = req.body.dailyGoalMin !== undefined ? Math.min(720, Math.max(15, parseInt(req.body.dailyGoalMin, 10) || 120)) : cur.dailyGoalMin;
   const lb = req.body.leaderboard !== undefined ? !!req.body.leaderboard : cur.leaderboard;
-  await db.run(`INSERT INTO user_prefs (user_id, daily_goal_min, leaderboard) VALUES (?, ?, ?)
-    ON CONFLICT (user_id) DO UPDATE SET daily_goal_min = excluded.daily_goal_min, leaderboard = excluded.leaderboard`, [req.user.id, goal, lb ? 1 : 0]);
+  const we = req.body.weeklyEmail !== undefined ? !!req.body.weeklyEmail : cur.weeklyEmail;
+  let tz = cur.tz;
+  if (req.body.tz !== undefined) {
+    try { new Intl.DateTimeFormat('en-US', { timeZone: String(req.body.tz) }); tz = String(req.body.tz).slice(0, 64); } catch { throw new HttpError(400, 'Unknown time zone.'); }
+  }
+  await db.run(`INSERT INTO user_prefs (user_id, daily_goal_min, leaderboard, weekly_email, tz) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET daily_goal_min = excluded.daily_goal_min, leaderboard = excluded.leaderboard,
+      weekly_email = excluded.weekly_email, tz = excluded.tz`, [req.user.id, goal, lb ? 1 : 0, we ? 1 : 0, tz]);
   res.json(await prefs(req.user.id));
 });
 
@@ -696,13 +743,14 @@ post('/account/google', async (req, res) => {
   const g = await googleIdentity(req.body.credential);
   const other = await db.get('SELECT id FROM users WHERE google_sub = ?', [g.sub]);
   if (other && other.id !== req.user.id) throw new HttpError(409, 'That Google account is already used by another Synapse account.');
-  await db.run('UPDATE users SET google_sub = ?, email = ? WHERE id = ?', [g.sub, g.emailVerified ? g.email : null, req.user.id]);
+  if (g.emailVerified) await db.run('UPDATE users SET google_sub = ?, email = ?, email_verified = 1, email_token = NULL WHERE id = ?', [g.sub, g.email, req.user.id]);
+  else await db.run('UPDATE users SET google_sub = ? WHERE id = ?', [g.sub, req.user.id]);
   res.json({ ok: true, email: g.emailVerified ? g.email : null });
 });
 del('/account/google', async (req, res) => {
   const u = await db.get('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
   if (!hasPassword(u)) throw new HttpError(400, "Google is this account's only way to sign in, so it can't be unlinked.");
-  await db.run('UPDATE users SET google_sub = NULL, email = NULL WHERE id = ?', [req.user.id]);
+  await db.run('UPDATE users SET google_sub = NULL WHERE id = ?', [req.user.id]);
   res.json({ ok: true });
 });
 
@@ -718,8 +766,42 @@ del('/account', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- community safety (safety.js) ----------
+safety.routes({ get, post, del, HttpError, text, intId, rateLimit });
+
 // ---------- burnout-prevention extras (extras.js) ----------
-require('./extras')({ get, post, del, HttpError, text, intId, requireConsent, prefs, db, analyze, game });
+ext = require('./extras')({ get, post, del, HttpError, text, intId, requireConsent, prefs, db, analyze, game });
+
+// ---------- weekly email report (weekly.js) ----------
+const emailLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
+get('/email', async (req, res) => {
+  const u = await db.get('SELECT email, email_verified, email_token FROM users WHERE id = ?', [req.user.id]);
+  const p = await prefs(req.user.id);
+  res.json({ email: u.email, verified: !!u.email_verified, pending: !!u.email_token, weekly: p.weeklyEmail, tz: p.tz, mailEnabled: mailer.enabled });
+});
+put('/email', emailLimiter, async (req, res) => {
+  if (!mailer.enabled) throw new HttpError(503, 'Email is not set up on this server yet (the admin needs to add SMTP_URL).');
+  const email = String(req.body.email || '').trim().toLowerCase();
+  if (!/^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i.test(email)) throw new HttpError(400, 'That email address does not look right.');
+  const cur = await db.get('SELECT email, email_verified FROM users WHERE id = ?', [req.user.id]);
+  if (cur.email === email && cur.email_verified) return res.json({ ok: true, verified: true });
+  const token = crypto.randomBytes(24).toString('base64url');
+  await db.run('UPDATE users SET email = ?, email_verified = 0, email_token = ? WHERE id = ?', [email, token, req.user.id]);
+  const link = `${weekly.baseUrl()}/api/email/verify?token=${token}`;
+  await mailer.send({ to: email, subject: 'Confirm your email for Synapse weekly reports',
+    text: `Confirm this address to get your weekly Synapse report:\n\n${link}\n\nIf you didn't ask for this, ignore this email.`,
+    html: `<p>Confirm this address to get your weekly Synapse report.</p><p><a href="${link}" style="display:inline-block;background:#1C2A33;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:700">Confirm email</a></p><p style="color:#74838C;font-size:12px">If you didn't ask for this, ignore this email.</p>` });
+  res.json({ ok: true, verified: false, sent: true });
+});
+get('/email/preview', async (req, res) => {
+  const u = await db.get('SELECT display_name FROM users WHERE id = ?', [req.user.id]);
+  res.json(weekly.build(u.display_name, await ext.review(req.user.id, req.query.day), req.user.id));
+});
+post('/email/test', emailLimiter, async (req, res) => {
+  const m = await weekly.sendReport(req.user.id, ext.review, req.body.day);
+  res.json({ ok: true, subject: m.subject });
+});
+weekly.startScheduler(ext.review);
 
 // ---------- errors ----------
 router.use((err, req, res, next) => {
@@ -730,3 +812,4 @@ router.use((err, req, res, next) => {
 });
 
 module.exports = router;
+router.review = (...a) => ext.review(...a); // used by tests and the scheduler

@@ -1,6 +1,7 @@
 // Burnout-prevention extras: distraction log, personal patterns, early-warning trend, smart block
 // length, accountability buddies and the weekly review. Mounted from routes.js (signed-in users only).
 const { dedupe } = require('./usage');
+const safety = require('./safety');
 
 const DISTRACTIONS = ['phone', 'social', 'messages', 'thoughts', 'people', 'noise', 'tired', 'other'];
 const DIST_LABEL = { phone: 'Picked up phone', social: 'Social media', messages: 'Messages', thoughts: 'Wandering thoughts', people: 'Someone interrupted', noise: 'Noise', tired: 'Tired or hungry', other: 'Something else' };
@@ -211,6 +212,7 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
     const u = await db.get('SELECT id, display_name FROM users WHERE username = ?', [username]);
     if (!u) throw new HttpError(404, 'No one with that username.');
     if (u.id === req.user.id) throw new HttpError(400, "That's you.");
+    if (await safety.blockedEitherWay(req.user.id, u.id)) throw new HttpError(403, "You can't send a request to that person.");
     const existing = await db.get(`${buddyRow(req.user.id)} AND (b.requester_id = ? OR b.addressee_id = ?)`, [req.user.id, req.user.id, req.user.id, u.id, u.id]);
     if (existing) {
       if (existing.status === 'pending' && existing.addressee_id === req.user.id) { // they asked you first: accept
@@ -243,6 +245,7 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
     const kind = CHEERS[req.body.kind] ? req.body.kind : 'cheer';
     const b = await db.get(`${buddyRow(req.user.id)} AND b.id = ? AND b.status = 'accepted'`, [req.user.id, req.user.id, req.user.id, intId(req.params.id)]);
     if (!b) throw new HttpError(404, 'Buddy not found.');
+    if (await safety.suspended(req.user.id)) throw new HttpError(403, "Your account can't send cheers right now.");
     const since = new Date(Date.now() - 30 * 60000).toISOString().replace('T', ' ').slice(0, 19);
     if (await db.get('SELECT 1 AS ok FROM cheers WHERE from_id = ? AND to_id = ? AND created_at > ?', [req.user.id, b.other_id, since]))
       throw new HttpError(429, 'You sent one recently. Give them a little time.');
@@ -252,9 +255,10 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
   });
 
   // ------------------------------------------------------------------ 6. weekly review
-  get('/review', async (req, res) => {
-    const to = dayOf(req.query.day), from = shift(to, -6), prevFrom = shift(to, -13), prevTo = shift(to, -7);
-    const all = await daily(req.user.id, prevFrom, to);
+  /** This week vs last (used by the Progress page and the weekly email). */
+  async function review(userId, toDay) {
+    const to = dayOf(toDay), from = shift(to, -6), prevFrom = shift(to, -13), prevTo = shift(to, -7);
+    const all = await daily(userId, prevFrom, to);
     const week = all.filter((r) => r.day >= from), prev = all.filter((r) => r.day < from);
     const sum = (a, k) => a.reduce((s, r) => s + (r[k] || 0), 0);
     const focus = sum(week, 'focusMin'), prevFocus = sum(prev, 'focusMin');
@@ -262,8 +266,8 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
     const screen = screenDays.length ? sum(screenDays, 'screenMin') / screenDays.length : null;
     const prevScreen = prevScreenDays.length ? sum(prevScreenDays, 'screenMin') / prevScreenDays.length : null;
     const best = week.filter((r) => r.focusMin > 0).sort((a, b) => b.focusMin - a.focusMin)[0] || null;
-    const topD = await db.get('SELECT kind, COUNT(*) AS n FROM distractions WHERE user_id = ? AND day BETWEEN ? AND ? GROUP BY kind ORDER BY n DESC LIMIT 1', [req.user.id, from, to]);
-    const tasksDone = await db.get('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 1 AND done_day BETWEEN ? AND ?', [req.user.id, from, to]);
+    const topD = await db.get('SELECT kind, COUNT(*) AS n FROM distractions WHERE user_id = ? AND day BETWEEN ? AND ? GROUP BY kind ORDER BY n DESC LIMIT 1', [userId, from, to]);
+    const tasksDone = await db.get('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 1 AND done_day BETWEEN ? AND ?', [userId, from, to]);
     const sleepVals = week.map((r) => r.sleep).filter((x) => x != null);
     const activeDays = week.filter((r) => r.focusMin > 0).length;
     let focusNext;
@@ -273,8 +277,12 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
     else if (screen != null && prevScreen && screen > prevScreen * 1.15) focusNext = `Screen time is up ${Math.round((screen / prevScreen - 1) * 100)}% on last week. Set a daily limit on your biggest leisure app.`;
     else if (activeDays < 4) focusNext = `You focused on ${activeDays} days. Aim for 4 this week, even if some are short.`;
     else focusNext = 'Solid week. Keep the rhythm and keep taking the breaks.';
-    res.json({
+    return {
       from, to, activeDays,
+      days: Array.from({ length: 7 }, (_, i) => {
+        const day = shift(from, i), r = week.find((x) => x.day === day);
+        return { day, focusMin: r ? Math.round(r.focusMin) : 0, screenMin: r && r.screenMin != null ? Math.round(r.screenMin) : null };
+      }),
       focusMin: Math.round(focus), prevFocusMin: Math.round(prevFocus), focusChange: prevFocus ? (focus - prevFocus) / prevFocus : null,
       blocks: sum(week, 'blocks'), abandoned: sum(week, 'abandoned'),
       screenAvgMin: screen != null ? Math.round(screen) : null, screenChange: screen != null && prevScreen ? (screen - prevScreen) / prevScreen : null,
@@ -283,7 +291,10 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
       distractions: sum(week, 'distractions'), tasksDone: Number(tasksDone.n),
       sleepAvg: sleepVals.length ? round(mean(sleepVals), 1) : null,
       focusNext,
-    });
-  });
+    };
+  }
+  get('/review', async (req, res) => res.json(await review(req.user.id, req.query.day)));
+
+  return { review };
 };
 module.exports.DISTRACTIONS = DISTRACTIONS;

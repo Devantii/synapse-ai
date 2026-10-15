@@ -21,8 +21,9 @@ async function load() {
   for (const [k, v] of Object.entries(CATEGORY_LABELS)) {
     const l = document.createElement('label');
     l.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:400;margin:0';
-    l.innerHTML = `<input type="checkbox" value="${k}" style="width:auto" ${b.categories.includes(k) ? 'checked' : ''} /> `;
-    l.append(v);
+    const box = Object.assign(document.createElement('input'), { type: 'checkbox', value: k, checked: b.categories.includes(k) });
+    box.style.width = 'auto';
+    l.append(box, ' ', v);
     cats.append(l);
   }
 
