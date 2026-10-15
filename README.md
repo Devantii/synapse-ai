@@ -110,6 +110,14 @@ Each upload replaces that device type's earlier totals for those days, so re-sen
 
 The ML model is trained when the server starts, on 4,000 synthetic profiles labelled by a scoring function built from common burnout-risk heuristics (long screen hours, few breaks, late sessions, short sleep, high stress). It fits that labelling with about 75% accuracy. That makes it a consistent, explainable coaching heuristic. It is not trained on clinical data and must not be presented as a validated burnout or mental-health assessment; the dashboard says so wherever scores appear. With real, consented outcome data you could retrain it in `analytics.js` (`trainModel`).
 
+## Deploy (one click, Render)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Devantii/synapse-ai)
+
+`render.yaml` sets everything up: Node 22, production mode, a generated `JWT_SECRET`, and the health check. After it deploys, add `OPENAI_API_KEY` or the `LIVEKIT_*` variables under the service's **Environment** tab if you want them.
+
+The free plan has no persistent disk, so accounts and data reset whenever the service restarts or redeploys. It also sleeps after about 15 idle minutes and takes 30-60 seconds to wake. For a real deployment, use the Starter plan and uncomment the disk lines in `render.yaml`.
+
 ## Hosting
 
 Any Node host with a persistent disk works (Render, Railway, Fly.io, a VPS). Set `NODE_ENV=production`, `JWT_SECRET`, `DB_PATH` on the persistent disk, and `TRUST_PROXY=1` behind a proxy. Serve over HTTPS: browsers only allow microphone access on HTTPS or `localhost`. SQLite suits a single server instance; for several instances, move to Postgres and add the Socket.IO Redis adapter.

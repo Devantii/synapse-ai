@@ -1,0 +1,30 @@
+# One-click deploy to Render: https://render.com/deploy?repo=https://github.com/Devantii/synapse-ai
+#
+# FREE PLAN NOTE: the free plan has no persistent disk, so the SQLite database resets whenever the
+# service restarts or redeploys (and it sleeps after ~15 min idle, waking in ~30-60 s).
+# To keep data: switch the plan to "starter", uncomment the disk block and DB_PATH below.
+services:
+  - type: web
+    name: synapse-ai
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: TRUST_PROXY
+        value: "1"
+      # - key: DB_PATH
+      #   value: /var/data/data.db
+    # disk:
+    #   name: synapse-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
