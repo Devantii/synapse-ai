@@ -7,10 +7,10 @@ import android.app.job.JobService;
 import android.content.ComponentName;
 import android.content.Context;
 
-/** Background sync about every 30 minutes when the phone has a network. Survives restarts. */
+/** Background sync about every 15 minutes (the shortest Android allows) when the phone has a network. Survives restarts. */
 public class SyncJobService extends JobService {
     static final int JOB_ID = 4201;
-    private static final long PERIOD_MS = 30L * 60 * 1000;
+    private static final long PERIOD_MS = 15L * 60 * 1000;
 
     @Override
     public boolean onStartJob(JobParameters params) {
