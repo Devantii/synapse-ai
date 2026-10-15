@@ -256,6 +256,15 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await got).body === 'Starting a 50 min block');
     const hist = await api('GET', '/api/rooms/deep-work/messages', null, B);
     assert(hist.data.length === 1);
+    // reply to a chat message
+    const firstId = hist.data[0].id;
+    const gotReply = new Promise((r) => sa.on('room:message', (m) => m.reply && r(m)));
+    assert((await emit(sb, 'room:message', { body: 'Same, good luck!', replyTo: firstId })).ok);
+    const rm = await gotReply;
+    assert(rm.reply.id === firstId && rm.reply.body === 'Starting a 50 min block', JSON.stringify(rm));
+    assert((await emit(sb, 'room:message', { body: 'x', replyTo: 999999 })).error, 'reply to a missing message must fail');
+    const hist2 = await api('GET', '/api/rooms/deep-work/messages', null, A);
+    assert(hist2.data.length === 2 && hist2.data[1].reply.author && hist2.data[0].reply === null, JSON.stringify(hist2.data));
     const rooms = await api('GET', '/api/rooms', null, A);
     assert(rooms.data.find((r) => r.id === 'deep-work').members.length === 2);
     // audio signaling
@@ -421,6 +430,41 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('DELETE', '/api/limits/' + yt.id, null, B)).status === 404, 'bob deleted alice limit');
     assert((await api('DELETE', '/api/limits/' + yt.id, null, A)).status === 200);
     assert((await api('GET', '/api/limits', null, B)).data.limits.length === 0, 'limits are private');
+  });
+
+  console.log('Replies + sample data');
+  await test('reply to a community check-in', async () => {
+    const p = await api('POST', '/api/posts', { mood: 'tired', body: 'Long day, short focus.' }, A);
+    let r = await api('POST', `/api/posts/${p.data.id}/replies`, { body: 'You still showed up. That counts.' }, B);
+    assert(r.status === 201 && r.data.replies.length === 1 && r.data.replies[0].isMine, JSON.stringify(r.data));
+    const feed = await api('GET', '/api/posts', null, A);
+    const post = feed.data.posts.find((x) => x.id === p.data.id);
+    assert(post.replies.length === 1 && post.replies[0].author && !post.replies[0].isMine);
+    assert((await api('DELETE', `/api/posts/${p.data.id}/replies/${r.data.id}`, null, A)).status === 404, 'only the author can delete a reply');
+    assert((await api('DELETE', `/api/posts/${p.data.id}/replies/${r.data.id}`, null, B)).status === 200);
+    assert((await api('POST', '/api/posts/999999/replies', { body: 'hi' }, B)).status === 404);
+  });
+  await test('sample data fills Insights and removes cleanly', async () => {
+    const reg = await api('POST', '/api/auth/register', { username: 'sampler', password: 'sample-pass-1' });
+    const S = reg.data.token;
+    await api('PUT', '/api/consents', { activity_tracking: true, usage_tracking: true, ai_insights: true }, S);
+    const today = new Date().toISOString().slice(0, 10);
+    const before = await api('GET', `/api/insights?day=${today}`, null, S);
+    assert(before.data.daysWithData === 0);
+    await api('PUT', '/api/checkins', { day: today, energy: 4, stress: 2, sleepHours: 8 }, S); // a real check-in
+    const add = await api('POST', '/api/sample-data', { today }, S);
+    assert(add.status === 201 && add.data.sessions > 20, JSON.stringify(add.data));
+    assert((await api('GET', '/api/me', null, S)).data.hasSampleData === true);
+    const ins = await api('GET', `/api/insights?day=${today}`, null, S);
+    assert(ins.data.daysWithData >= 5 && ins.data.confidence === 'good' && ins.data.ml.factors.length > 0, JSON.stringify(ins.data.counts));
+    const stats = await api('GET', '/api/stats', null, S);
+    assert(stats.status === 200);
+    assert((await api('DELETE', '/api/sample-data', null, S)).status === 200);
+    const after = await api('GET', `/api/insights?day=${today}`, null, S);
+    assert(after.data.daysWithData === 0 && after.data.counts.focusSessions === 0, JSON.stringify(after.data.counts));
+    const ch = await api('GET', '/api/checkins', null, S);
+    assert(ch.data.length === 1 && ch.data[0].energy === 4, 'real check-in kept');
+    assert((await api('GET', '/api/me', null, S)).data.hasSampleData === false);
   });
 
   console.log('Export + deletion');

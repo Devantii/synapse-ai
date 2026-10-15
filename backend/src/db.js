@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
   tag          TEXT,
   day          TEXT NOT NULL,            -- user's local YYYY-MM-DD
   started_at   TEXT NOT NULL,
-  ended_at     TEXT NOT NULL
+  ended_at     TEXT NOT NULL,
+  sample       INTEGER NOT NULL DEFAULT 0 -- 1 = "Try with sample data" row
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON focus_sessions(user_id, day);
 
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS mood_checkins (
   stress     INTEGER NOT NULL CHECK (stress BETWEEN 1 AND 5),
   sleep_h    ${T.REAL},
   created_at TEXT NOT NULL DEFAULT ${T.NOW},
+  sample     INTEGER NOT NULL DEFAULT 0,
   UNIQUE (user_id, day)
 );
 
@@ -168,9 +170,20 @@ CREATE TABLE IF NOT EXISTS room_messages (
   room_id    TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body       TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT ${T.NOW}
+  created_at TEXT NOT NULL DEFAULT ${T.NOW},
+  reply_to   INTEGER                    -- id of the message this one answers
 );
 CREATE INDEX IF NOT EXISTS idx_room_msgs ON room_messages(room_id, id);
+
+-- Replies to community check-ins.
+CREATE TABLE IF NOT EXISTS post_replies (
+  id         ${T.ID},
+  post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT ${T.NOW}
+);
+CREATE INDEX IF NOT EXISTS idx_post_replies ON post_replies(post_id, id);
 `;
 
 const ROOMS = [
@@ -270,14 +283,24 @@ function postgresDriver() {
 const driver = dialect === 'postgres' ? postgresDriver() : sqliteDriver();
 
 // Upgrades for databases created by older versions. Each step is idempotent.
+async function columns(table) {
+  return dialect === 'postgres'
+    ? (await driver.all('SELECT column_name AS name FROM information_schema.columns WHERE table_name = ? AND table_schema = current_schema()', [table])).map((r) => r.name)
+    : (await driver.all(`PRAGMA table_info(${table})`)).map((r) => r.name);
+}
+async function addColumn(table, name, def) {
+  if (!(await columns(table)).includes(name)) await driver.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+}
+
 async function migrate() {
   // v1.5: sign in with Google.
-  const cols = dialect === 'postgres'
-    ? (await driver.all("SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'users' AND table_schema = current_schema()")).map((r) => r.name)
-    : (await driver.all('PRAGMA table_info(users)')).map((r) => r.name);
-  if (!cols.includes('google_sub')) await driver.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
-  if (!cols.includes('email')) await driver.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  await addColumn('users', 'google_sub', 'TEXT');
+  await addColumn('users', 'email', 'TEXT');
   await driver.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub ON users (google_sub)');
+  // v1.6: sample data, chat replies.
+  await addColumn('focus_sessions', 'sample', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('mood_checkins', 'sample', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('room_messages', 'reply_to', 'INTEGER');
 
   // v1.3: device_tokens.kind also allows 'phone' (Android app).
   if (dialect === 'postgres') {

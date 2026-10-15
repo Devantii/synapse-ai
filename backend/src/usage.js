@@ -9,7 +9,7 @@
 //     phone + computer tracked time combined (and then replaces them).
 // Rows still exist individually so the user can see and delete each one.
 
-const SOURCE_LABEL = { self: 'entered by you', synapse: 'this tab, measured', extension: 'browser extension', desktop: 'desktop tracker', phone: 'Android phone' };
+const SOURCE_LABEL = { self: 'entered by you', synapse: 'this tab, measured', extension: 'browser extension', desktop: 'desktop tracker', phone: 'Android phone', sample: 'sample data' };
 
 function appKey(name) {
   let s = String(name).trim().toLowerCase();

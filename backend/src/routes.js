@@ -9,6 +9,7 @@ const coach = require('./coach');
 const devices = require('./devices');
 const voice = require('./voice');
 const google = require('./google');
+const sample = require('./sample');
 const { dedupe, appKey, SOURCE_LABEL } = require('./usage');
 const sessions = require('./sessions');
 
@@ -161,6 +162,7 @@ get('/me', async (req, res) => {
     user: { id: u.id, username: u.username, displayName: u.display_name, createdAt: u.created_at,
       hasPassword: hasPassword(u), google: !!u.google_sub, email: u.email || null },
     googleClientId: google.enabled ? google.clientId : null,
+    hasSampleData: await sample.has(u.id),
     consents: await consents(u.id),
     rewards: await game.summary(u.id),
     llmEnabled: coach.llmEnabled,
@@ -448,12 +450,24 @@ async function feed(userId, limit, beforeId) {
       [userId, ...ids]
     )
     : [];
+  const replies = ids.length ? await repliesFor(userId, ids) : [];
   return rows.map((p) => {
     const reactions = Object.fromEntries(REACTIONS.map((k) => [k, { count: 0, mine: false }]));
     for (const r of rx) if (r.post_id === p.id) reactions[r.kind] = { count: r.n, mine: !!r.mine };
     const { user_id, ...rest } = p;
-    return { ...rest, isMine: user_id === userId, reactions };
+    return { ...rest, isMine: user_id === userId, reactions, replies: replies.filter((r) => r.post_id === p.id).map(({ post_id, ...r }) => r) };
   });
+}
+
+async function repliesFor(userId, postIds) {
+  const rows = await db.all(
+    `SELECT r.id, r.post_id, r.body, r.created_at, r.user_id,
+            CASE WHEN c.community_profile = 0 THEN 'Anonymous member' ELSE u.display_name END AS author
+       FROM post_replies r JOIN users u ON u.id = r.user_id LEFT JOIN consents c ON c.user_id = r.user_id
+      WHERE r.post_id IN (${postIds.map(() => '?').join(',')}) ORDER BY r.id`,
+    postIds
+  );
+  return rows.map(({ user_id, ...r }) => ({ ...r, isMine: user_id === userId }));
 }
 
 get('/posts', async (req, res) => {
@@ -485,6 +499,22 @@ post('/posts/:id/react', async (req, res) => {
   res.json({ active: !removed.changes });
 });
 
+// Replies to a check-in.
+const replyLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
+post('/posts/:id/replies', replyLimiter, async (req, res) => {
+  const p = await db.get('SELECT id FROM posts WHERE id = ?', [intId(req.params.id)]);
+  if (!p) throw new HttpError(404, 'Post not found.');
+  const body = text(req.body.body, 'Reply', 1, 400);
+  const id = await db.insert('INSERT INTO post_replies (post_id, user_id, body) VALUES (?, ?, ?)', [p.id, req.user.id, body]);
+  req.app.get('io')?.emit('community:reply', { postId: p.id, id });
+  res.status(201).json({ id, replies: await repliesFor(req.user.id, [p.id]) });
+});
+del('/posts/:id/replies/:rid', async (req, res) => {
+  const r = await db.run('DELETE FROM post_replies WHERE id = ? AND post_id = ? AND user_id = ?', [intId(req.params.rid), intId(req.params.id), req.user.id]);
+  if (!r.changes) throw new HttpError(404, 'Reply not found or not yours.');
+  res.json({ ok: true });
+});
+
 del('/posts/:id', async (req, res) => {
   const r = await db.run('DELETE FROM posts WHERE id = ? AND user_id = ?', [intId(req.params.id), req.user.id]);
   if (!r.changes) throw new HttpError(404, 'Post not found or not yours.');
@@ -498,11 +528,15 @@ get('/rooms', async (req, res) => {
 });
 get('/rooms/:id/messages', async (req, res) => {
   const rows = await db.all(
-    `SELECT m.id, m.body, m.created_at, u.display_name AS author, CASE WHEN m.user_id = ? THEN 1 ELSE 0 END AS "isMine"
-       FROM room_messages m JOIN users u ON u.id = m.user_id WHERE m.room_id = ? ORDER BY m.id DESC LIMIT 50`,
+    `SELECT m.id, m.body, m.created_at, m.user_id AS "userId", u.display_name AS author, CASE WHEN m.user_id = ? THEN 1 ELSE 0 END AS "isMine",
+            m.reply_to AS "replyId", pu.display_name AS "replyAuthor", p.body AS "replyBody"
+       FROM room_messages m JOIN users u ON u.id = m.user_id
+       LEFT JOIN room_messages p ON p.id = m.reply_to LEFT JOIN users pu ON pu.id = p.user_id
+      WHERE m.room_id = ? ORDER BY m.id DESC LIMIT 50`,
     [req.user.id, String(req.params.id)]
   );
-  res.json(rows.reverse());
+  res.json(rows.reverse().map(({ replyId, replyAuthor, replyBody, ...m }) => ({
+    ...m, reply: replyId ? { id: replyId, author: replyAuthor || 'Deleted message', body: replyBody ? String(replyBody).slice(0, 140) : '' } : null })));
 });
 
 // ---------- connected devices (extension / desktop tracker) ----------
@@ -545,6 +579,7 @@ get('/export', async (req, res) => {
     communityPosts: await q('SELECT id, mood, body, created_at FROM posts WHERE user_id = ? ORDER BY id'),
     reactionsGiven: await q('SELECT post_id, kind, created_at FROM reactions WHERE user_id = ?'),
     roomMessages: await q('SELECT room_id, body, created_at FROM room_messages WHERE user_id = ? ORDER BY id'),
+    communityReplies: await q('SELECT post_id, body, created_at FROM post_replies WHERE user_id = ? ORDER BY id'),
     connectedDevices: await q('SELECT name, kind, created_at, last_used_at, revoked_at FROM device_tokens WHERE user_id = ? ORDER BY id'),
   };
   res.setHeader('Content-Disposition', `attachment; filename="synapse-export-${serverToday()}.json"`);
@@ -555,7 +590,7 @@ const DELETE_SCOPES = {
   activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
-  community: ['posts', 'reactions', 'room_messages'],
+  community: ['posts', 'post_replies', 'reactions', 'room_messages'],
 };
 del('/data', async (req, res) => {
   const scope = req.body.scope;
@@ -565,6 +600,16 @@ del('/data', async (req, res) => {
     for (const table of tables) await t.run(`DELETE FROM ${table} WHERE user_id = ?`, [req.user.id]);
   });
   res.json({ ok: true, deleted: scope });
+});
+
+// ---------- sample data ----------
+// Three weeks of clearly marked sample activity so a new account can see Progress and Insights working.
+post('/sample-data', async (req, res) => {
+  res.status(201).json(await sample.add(req.user.id, req.body.today));
+});
+del('/sample-data', async (req, res) => {
+  await sample.remove(req.user.id);
+  res.json({ ok: true });
 });
 
 // ---------- Google link ----------

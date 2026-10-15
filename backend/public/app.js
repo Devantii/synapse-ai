@@ -582,6 +582,7 @@ async function renderRoom(main, roomId) {
       <aside class="panel"><h2 style="font-size:var(--step-1)">Here now</h2><ul class="people" id="people"></ul></aside>
       <section class="panel chat">
         <div class="chat-log" id="chat-log" aria-live="polite"></div>
+        <div class="replying" id="replying" hidden><span></span><button type="button" class="link" id="reply-cancel" aria-label="Cancel reply">Cancel</button></div>
         <form class="chat-form" id="chat-form"><label class="sr" style="position:absolute;left:-999px" for="chat-input">Message</label>
           <input id="chat-input" maxlength="500" autocomplete="off" placeholder="Say what you're starting on" /><button class="btn primary">Send</button></form>
       </section>
@@ -589,9 +590,30 @@ async function renderRoom(main, roomId) {
   const log = $('#chat-log');
   const addMsg = (m) => {
     const mine = m.isMine || m.userId === state.me.user.id;
-    log.insertAdjacentHTML('beforeend', `<div class="msg ${mine ? 'mine' : ''}"><div class="who">${mine ? 'You' : esc(m.author)} · ${ago(m.created_at)}</div><div class="bubble">${esc(m.body)}</div></div>`);
+    const quote = m.reply ? `<button class="quote" data-jump="${m.reply.id}"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</button>` : '';
+    log.insertAdjacentHTML('beforeend', `<div class="msg ${mine ? 'mine' : ''}" data-mid="${m.id}" data-author="${esc(mine ? 'yourself' : m.author)}"><div class="who">${mine ? 'You' : esc(m.author)} · ${ago(m.created_at)}
+      <button class="link msg-reply" data-reply="${m.id}">Reply</button></div>${quote}<div class="bubble">${esc(m.body)}</div></div>`);
     log.scrollTop = log.scrollHeight;
   };
+  let replyTo = null;
+  const setReply = (id) => {
+    replyTo = id;
+    const box = $('#replying');
+    box.hidden = !id;
+    if (id) {
+      const el = log.querySelector(`[data-mid="${id}"]`);
+      $('span', box).textContent = `Replying to ${el?.dataset.author || 'message'}: ${(el?.querySelector('.bubble')?.textContent || '').slice(0, 80)}`;
+      $('#chat-input').focus();
+    }
+  };
+  log.addEventListener('click', (e) => {
+    const r = e.target.closest('[data-reply]');
+    if (r) return setReply(+r.dataset.reply);
+    const j = e.target.closest('[data-jump]');
+    const target = j && log.querySelector(`[data-mid="${j.dataset.jump}"]`);
+    if (target) { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); target.classList.add('flash'); setTimeout(() => target.classList.remove('flash'), 1200); }
+  });
+  $('#reply-cancel').addEventListener('click', () => setReply(null));
   (await api('GET', `/rooms/${roomId}/messages`)).forEach(addMsg);
   if (!log.children.length) log.innerHTML = `<p class="empty" id="chat-empty">No messages yet. Say what you're working on so others know you're here.</p>`;
 
@@ -621,8 +643,8 @@ async function renderRoom(main, roomId) {
     const inp = $('#chat-input');
     const body = inp.value.trim();
     if (!body) return;
-    const r = await emitAck('room:message', { body });
-    if (r.error) toast(r.error, 'err'); else inp.value = '';
+    const r = await emitAck('room:message', replyTo ? { body, replyTo } : { body });
+    if (r.error) toast(r.error, 'err'); else { inp.value = ''; setReply(null); }
   });
 
   const paintCall_ = () => {
@@ -980,7 +1002,13 @@ VIEWS.community = async (main) => {
     <li class="post" data-id="${p.id}"><header><b>${esc(p.author)}${p.isMine ? ' (you)' : ''}</b><span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood] || p.mood)}</span><time>${ago(p.created_at)}</time></header>
       <p>${esc(p.body)}</p>
       <div class="reacts">${Object.entries(RX).map(([k, label]) => `<button class="react" data-react="${k}" aria-pressed="${p.reactions[k].mine}">${label}${p.reactions[k].count ? ` <span class="num">${p.reactions[k].count}</span>` : ''}</button>`).join('')}
-      ${p.isMine ? `<button class="link" data-delete style="margin-left:auto;font-size:13px">Delete</button>` : ''}</div></li>`;
+      <button class="react" data-reply-toggle>Reply${p.replies.length ? ` <span class="num">${p.replies.length}</span>` : ''}</button>
+      ${p.isMine ? `<button class="link" data-delete style="margin-left:auto;font-size:13px">Delete</button>` : ''}</div>
+      <div class="replies" ${p.replies.length ? '' : 'hidden'}>${p.replies.map(replyHtml).join('')}</div>
+      <form class="reply-form" hidden><label class="sr" style="position:absolute;left:-999px">Reply</label>
+        <input name="body" maxlength="400" autocomplete="off" placeholder="Write a kind reply" required /><button class="btn primary">Reply</button></form></li>`;
+  const replyHtml = (r) => `<div class="reply" data-rid="${r.id}"><b>${esc(r.author)}${r.isMine ? ' (you)' : ''}</b> <time>${ago(r.created_at)}</time>
+      ${r.isMine ? '<button class="link" data-reply-delete>Delete</button>' : ''}<p>${esc(r.body)}</p></div>`;
   async function load(reset) {
     const r = await api('GET', `/posts?limit=15${!reset && oldest ? `&before=${oldest}` : ''}`);
     if (reset) feed.innerHTML = '';
@@ -1018,7 +1046,41 @@ VIEWS.community = async (main) => {
       if (e.target.closest('[data-delete]') && confirm('Delete this check-in?')) {
         await api('DELETE', `/posts/${li.dataset.id}`); li.remove(); toast('Check-in deleted');
       }
+      if (e.target.closest('[data-reply-toggle]')) {
+        const f = $('.reply-form', li);
+        f.hidden = !f.hidden;
+        $('.replies', li).hidden = f.hidden && !$('.replies', li).children.length;
+        if (!f.hidden) f.elements.body.focus();
+      }
+      const rdel = e.target.closest('[data-reply-delete]');
+      if (rdel && confirm('Delete this reply?')) {
+        const rep = rdel.closest('.reply');
+        await api('DELETE', `/posts/${li.dataset.id}/replies/${rep.dataset.rid}`);
+        rep.remove();
+        paintReplyCount(li);
+      }
     } catch (err) { fail(err); }
+  });
+  const paintReplyCount = (li) => {
+    const n = $('.replies', li).children.length;
+    $('[data-reply-toggle]', li).innerHTML = `Reply${n ? ` <span class="num">${n}</span>` : ''}`;
+  };
+  feed.addEventListener('submit', async (e) => {
+    const f = e.target.closest('.reply-form');
+    if (!f) return;
+    e.preventDefault();
+    const li = f.closest('.post');
+    const body = f.elements.body.value.trim();
+    if (!body) return;
+    const btn = $('button', f);
+    btn.disabled = true;
+    try {
+      const r = await api('POST', `/posts/${li.dataset.id}/replies`, { body });
+      $('.replies', li).innerHTML = r.replies.map(replyHtml).join('');
+      $('.replies', li).hidden = false;
+      f.reset();
+      paintReplyCount(li);
+    } catch (err) { fail(err); } finally { btn.disabled = false; }
   });
   const onNew = () => { $('#new-banner').hidden = false; };
   $('#new-banner').addEventListener('click', async () => { $('#new-banner').hidden = true; oldest = null; await load(true); });
@@ -1034,6 +1096,7 @@ VIEWS['screen-time'] = async (main) => {
   let day = localDay();
   main.innerHTML = `
     <div class="page-head"><div><h1>Screen time</h1><p>Log how long you spent in each app or site. Your phone's Digital Wellbeing or Screen Time page has these numbers.</p></div></div>
+    ${sampleBanner(false)}
     <div class="stack">
       <section class="panel">
         <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h2 style="font-size:var(--step-1)">Last 14 days</h2><span class="muted" id="week-avg"></span></div>
@@ -1281,6 +1344,7 @@ VIEWS.progress = async (main) => {
   const pct = (x) => (x == null ? '–' : `${Math.round(x * 100)}%`);
   if (!t.sessions && !d.weeks.some((w) => w.screen)) {
     main.innerHTML = `<div class="page-head"><div><h1>Progress</h1><p>Your focus patterns over the last six months.</p></div></div>
+      ${sampleBanner(true)}
       <section class="panel"><h2>Nothing to chart yet</h2><p>Finish a focus block on <a href="#/today">Today</a> and this page fills in: a calendar of your focus days, weekly trends, and the hours you focus best.</p></section>`;
     return;
   }
@@ -1292,6 +1356,7 @@ VIEWS.progress = async (main) => {
   const maxTag = Math.max(1, ...d.tags.map((x) => x.minutes));
   main.innerHTML = `
     <div class="page-head"><div><h1>Progress</h1><p>Your focus patterns over the last six months. Hover or tap any square or bar for details.</p></div></div>
+    ${sampleBanner(false)}
     <div class="progress stack">
       <div class="statline progress-stats">
         <div><b class="num">${fmtMin(t.focusMinutes)}</b><span>focused in 6 months</span></div>
@@ -1336,11 +1401,44 @@ VIEWS.progress = async (main) => {
 };
 
 // ---------------------------------------------------------------- Insights
+async function addSampleData(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    state.me.consents = await api('PUT', '/consents', { activity_tracking: true, usage_tracking: true, ai_insights: true });
+    await api('POST', '/sample-data', { today: localDay() });
+    state.me = await api('GET', '/me');
+    toast('Added 3 weeks of sample data. Remove it any time.');
+    route();
+  } catch (e) { fail(e); if (btn) btn.disabled = false; }
+}
+async function removeSampleData() {
+  try { await api('DELETE', '/sample-data'); state.me = await api('GET', '/me'); toast('Sample data removed'); route(); } catch (e) { fail(e); }
+}
+/** Banner shown on data pages while sample data is loaded, or an offer when the account is empty. */
+function sampleBanner(empty) {
+  if (state.me.hasSampleData) return `<div class="sample-banner"><span><b>Sample data.</b> You're seeing 3 weeks of made-up activity mixed with your own, so you can explore. It's not you.</span><button class="btn" data-sample="remove">Remove sample data</button></div>`;
+  if (empty) return `<div class="sample-banner offer"><span><b>Nothing to analyse yet.</b> Use the timer and log screen time for a few days, or explore with 3 weeks of sample data first.</span><button class="btn grow" data-sample="add">Try with sample data</button></div>`;
+  return '';
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-sample]');
+  if (!b) return;
+  if (b.dataset.sample === 'add') addSampleData(b);
+  else if (confirm('Remove all sample data? Your own data stays.')) removeSampleData();
+});
+
 VIEWS.insights = async (main) => {
   if (!state.me.consents.ai_insights) {
-    main.innerHTML = `<div class="page-head"><div><h1>Insights</h1></div></div>
-      <section class="panel"><h2>Insights are off</h2><p>When you turn them on, Synapse analyses your saved focus sessions, screen-time totals and private mood check-ins to estimate how balanced your week looks, and shows exactly which patterns drove that estimate.</p>
-      <button class="btn primary" id="enable-ai">Turn on insights</button></section>`;
+    main.innerHTML = `<div class="page-head"><div><h1>Insights</h1><p>Machine learning and fuzzy logic that explain how balanced your week looks.</p></div></div>
+      <div class="split"><section class="panel"><h2>Insights are off</h2><p>When you turn them on, Synapse analyses your saved focus sessions, screen-time totals and private mood check-ins to estimate how balanced your week looks, and shows exactly which patterns drove that estimate.</p>
+      <ol class="how-ml">
+        <li><b>10 patterns</b> are measured from your last 7 days: screen time, share on social and video, late-night sessions, breaks, deep-focus time, abandoned sessions, week-over-week change, stress, energy and sleep.</li>
+        <li><b>A machine-learning model</b> (logistic regression) turns them into a load estimate and shows how much each pattern pushed it up or down.</li>
+        <li><b>Fuzzy logic</b> rates screen load, recovery and strain as low, medium or high and combines them with readable rules.</li>
+        <li><b>Suggestions</b> come with a "because" so you can see why each one was made.</li></ol>
+      <div class="row-btns"><button class="btn primary" id="enable-ai">Turn on insights</button>
+      ${state.me.hasSampleData ? '' : '<button class="btn grow" data-sample="add">Turn on and try with sample data</button>'}</div>
+      <p class="muted" style="font-size:var(--step--1);margin-top:12px">Sample data turns on saving focus, screen time and insights, then adds 3 weeks of clearly marked made-up activity you can remove in one click.</p></section></div>`;
     $('#enable-ai').addEventListener('click', async () => { try { state.me.consents = await api('PUT', '/consents', { ai_insights: true }); route(); } catch (e) { fail(e); } });
     return;
   }
@@ -1353,6 +1451,7 @@ VIEWS.insights = async (main) => {
 
   main.innerHTML = `
     <div class="page-head"><div><h1>Insights</h1><p>Based on the last 7 days. ${esc(ins.disclaimer)}</p></div></div>
+    ${sampleBanner(ins.daysWithData < 2)}
     <div class="split">
       <div class="stack">
         <section class="panel verdict">

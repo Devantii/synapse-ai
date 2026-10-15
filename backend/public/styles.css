@@ -477,3 +477,33 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 .google-btn { min-height: 44px; display: flex; justify-content: center; }
 .or { display: flex; align-items: center; gap: 12px; margin: 16px 0 4px; color: var(--ink-3); font-size: var(--step--1); }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+
+/* ---------- sample data ---------- */
+.sample-banner { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; justify-content: space-between; padding: 14px 16px; margin-bottom: 18px;
+  border-radius: var(--r-md); border: 1.5px dashed var(--amber, #B0761A); background: color-mix(in srgb, var(--amber, #B0761A) 10%, var(--surface)); color: var(--ink-2); }
+.sample-banner.offer { border-color: var(--lichen); background: var(--lichen-soft); }
+.sample-banner span { flex: 1 1 320px; }
+.how-ml { padding-left: 20px; color: var(--ink-2); }
+.how-ml li { margin: 6px 0; }
+.row-btns { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* ---------- replies ---------- */
+.replies { margin: 10px 0 0 4px; padding-left: 14px; border-left: 2px solid var(--line); display: grid; gap: 8px; }
+.replies[hidden] { display: none; }
+.reply { font-size: var(--step--1); }
+.reply time { color: var(--ink-3); margin-left: 4px; }
+.reply p { margin: 2px 0 0; color: var(--ink); font-size: var(--step-0, 1rem); }
+.reply .link { font-size: 12px; margin-left: 6px; }
+.reply-form { display: flex; gap: 8px; margin-top: 10px; }
+.reply-form[hidden] { display: none; }
+.reply-form input { flex: 1; min-width: 0; }
+.msg .who .msg-reply { font-size: 12px; padding: 0 0 0 6px; opacity: 0; transition: opacity .15s; }
+.msg:hover .msg-reply, .msg:focus-within .msg-reply { opacity: 1; }
+@media (hover: none) { .msg .who .msg-reply { opacity: 1; } }
+.msg .quote { display: block; max-width: 100%; text-align: left; font: inherit; font-size: 13px; color: var(--ink-2); background: var(--surface-2); border: 0;
+  border-left: 3px solid var(--lichen); border-radius: 8px; padding: 6px 10px; margin: 2px 0 4px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg.mine .quote { margin-left: auto; }
+.msg.flash .bubble { outline: 2px solid var(--lichen); outline-offset: 2px; }
+.replying { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin-top: 8px; border-radius: 10px; background: var(--surface-2); font-size: 13px; color: var(--ink-2); }
+.replying[hidden] { display: none; }
+.replying span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -22,7 +22,8 @@ function attach(io) {
   });
 
   const roomExists = async (id) => !!(await db.get('SELECT 1 AS ok FROM rooms WHERE id = ?', [id]));
-  const insertMsg = (roomId, userId, body) => db.insert('INSERT INTO room_messages (room_id, user_id, body) VALUES (?, ?, ?)', [roomId, userId, body]);
+  const insertMsg = (roomId, userId, body, replyTo) =>
+    db.insert('INSERT INTO room_messages (room_id, user_id, body, reply_to) VALUES (?, ?, ?, ?)', [roomId, userId, body, replyTo]);
 
   // Simple per-socket flood control for chat.
   const lastMsgs = new Map();
@@ -75,21 +76,29 @@ function attach(io) {
       ack?.({ ok: true });
     });
 
-    socket.on('room:message', async ({ body } = {}, ack) => {
+    socket.on('room:message', async ({ body, replyTo } = {}, ack) => {
       const m = members.get(socket.id);
       const text = typeof body === 'string' ? body.trim() : '';
       if (!m?.roomId) return ack?.({ error: 'Join a room first.' });
       if (!text || text.length > 500) return ack?.({ error: 'Messages must be 1-500 characters.' });
       if (!allowMessage(socket.id)) return ack?.({ error: 'Slow down a little.' });
       const roomId = m.roomId;
+      let reply = null;
+      if (replyTo != null) {
+        const p = Number.isInteger(replyTo) ? await db.get(
+          'SELECT m.id, m.body, u.display_name AS author FROM room_messages m JOIN users u ON u.id = m.user_id WHERE m.id = ? AND m.room_id = ?',
+          [replyTo, roomId]).catch(() => null) : null;
+        if (!p) return ack?.({ error: 'The message you replied to is gone.' });
+        reply = { id: p.id, author: p.author, body: String(p.body).slice(0, 140) };
+      }
       let id;
       try {
-        id = await insertMsg(roomId, m.userId, text);
+        id = await insertMsg(roomId, m.userId, text, reply?.id ?? null);
       } catch (e) {
         console.error('[rooms] message save failed:', e.message);
         return ack?.({ error: 'Message not sent. Try again.' });
       }
-      const msg = { id, body: text, author: m.name, userId: m.userId, created_at: new Date().toISOString().replace('T', ' ').slice(0, 19) };
+      const msg = { id, body: text, author: m.name, userId: m.userId, created_at: new Date().toISOString().replace('T', ' ').slice(0, 19), reply };
       io.to(roomId).emit('room:message', msg);
       ack?.({ ok: true });
     });
