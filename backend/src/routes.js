@@ -9,6 +9,7 @@ const coach = require('./coach');
 const devices = require('./devices');
 const voice = require('./voice');
 const { dedupe, appKey, SOURCE_LABEL } = require('./usage');
+const sessions = require('./sessions');
 
 const router = express.Router();
 
@@ -133,26 +134,8 @@ get('/consents/log', async (req, res) =>
 );
 
 // ---------- focus sessions ----------
-const LOCAL_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
 post('/sessions', requireConsent('activity_tracking', 'Save focus activity'), async (req, res) => {
-  const kind = req.body.kind === 'break' ? 'break' : req.body.kind === 'focus' ? 'focus' : null;
-  if (!kind) throw new HttpError(400, 'kind must be "focus" or "break".');
-  const plannedMin = num(req.body.plannedMin, 'plannedMin', 1, 120);
-  const actualMin = num(req.body.actualMin, 'actualMin', 0, plannedMin + 1);
-  const completed = req.body.completed ? 1 : 0;
-  if (completed && actualMin < plannedMin - 0.5) throw new HttpError(400, 'A completed session must run its planned length.');
-  const day = validDay(req.body.day, { maxPastDays: 2 });
-  const startedAt = String(req.body.startedAt || '');
-  const endedAt = String(req.body.endedAt || '');
-  if (!LOCAL_TS.test(startedAt) || !LOCAL_TS.test(endedAt)) throw new HttpError(400, 'startedAt/endedAt must be local timestamps (YYYY-MM-DDTHH:MM).');
-  const tag = req.body.tag ? text(req.body.tag, 'Tag', 1, 40) : null;
-
-  // Rate guard: you cannot log more focus minutes in a day than exist in it.
-  const sum = (await db.get('SELECT COALESCE(SUM(actual_min), 0) AS m FROM focus_sessions WHERE user_id = ? AND day = ?', [req.user.id, day])).m;
-  if (sum + actualMin > 24 * 60) throw new HttpError(400, 'That exceeds the minutes in a day.');
-
-  const session = { kind, planned_min: plannedMin, actual_min: actualMin, completed, tag, day, started_at: startedAt, ended_at: endedAt };
-  const result = await game.recordSession(req.user.id, session);
+  const result = await sessions.record(req.user.id, req.body);
   res.status(201).json({ ...result, rewards: await game.summary(req.user.id) });
 });
 
@@ -167,22 +150,10 @@ get('/sessions', async (req, res) => {
 
 // Current timer state (lets the browser extension block distracting sites during focus).
 put('/focus/state', async (req, res) => {
-  const mode = req.body.mode === 'focus' || req.body.mode === 'break' ? req.body.mode : null;
-  let endsAt = null;
-  if (mode) {
-    endsAt = Number(req.body.endsAt);
-    const now = Date.now();
-    if (!Number.isFinite(endsAt) || endsAt < now - 60000 || endsAt > now + 125 * 60000)
-      throw new HttpError(400, 'endsAt must be within the next 2 hours.');
-    endsAt = Math.round(endsAt);
-  }
-  await db.run(
-    `INSERT INTO focus_state (user_id, mode, ends_at, updated_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT (user_id) DO UPDATE SET mode = excluded.mode, ends_at = excluded.ends_at, updated_at = excluded.updated_at`,
-    [req.user.id, mode, endsAt, db.now()]
-  );
+  await sessions.setFocusState(req.user.id, req.body);
   res.json({ ok: true });
 });
+get('/focus/state', async (req, res) => res.json(await sessions.getFocusState(req.user.id)));
 
 // ---------- screen time ----------
 put('/usage', requireConsent('usage_tracking', 'Save screen-time data'), async (req, res) => {
@@ -550,7 +521,7 @@ del('/account', async (req, res) => {
 
 // ---------- errors ----------
 router.use((err, req, res, next) => {
-  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err instanceof HttpError || err.expose) return res.status(err.status).json({ error: err.message });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON.' });
   console.error(err);
   res.status(500).json({ error: 'Something went wrong.' });

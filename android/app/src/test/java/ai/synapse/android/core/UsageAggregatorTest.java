@@ -90,6 +90,30 @@ public class UsageAggregatorTest {
     }
 
     @Test
+    public void pickupsFirstPickupAndHourly() {
+        List<Event> e = Arrays.asList(
+                ev(-300, null, SCREEN_INTERACTIVE), ev(-299, null, KEYGUARD_HIDDEN),   // 7:00 am first unlock
+                ev(-298, WA, ACTIVITY_RESUMED), ev(-290, WA, ACTIVITY_PAUSED),         // 8 min at 7 am
+                ev(-30, null, SCREEN_INTERACTIVE), ev(-29, null, KEYGUARD_HIDDEN),
+                ev(-10, INSTA, ACTIVITY_RESUMED), ev(20, INSTA, ACTIVITY_PAUSED),       // 11:50 -> 12:20 spans two hours
+                ev(25, null, SCREEN_INTERACTIVE));                                      // screen-on without unlock: not a pickup
+        UsageAggregator.Result r = agg.analyze(e, NOON + 60 * MIN);
+        assertEquals(2, (int) r.pickups.get("2026-10-15"));
+        assertEquals(NOON - 299 * MIN, (long) r.firstPickup.get("2026-10-15"));
+        long[] h = r.hourly.get("2026-10-15");
+        assertEquals(8, h[7] / MIN);
+        assertEquals(10, h[11] / MIN);
+        assertEquals(20, h[12] / MIN);
+        assertEquals(38, r.totalMs("2026-10-15") / MIN);
+    }
+
+    @Test
+    public void phonesWithoutLockScreenCountScreenOns() {
+        List<Event> e = Arrays.asList(ev(0, null, SCREEN_INTERACTIVE), ev(30, null, SCREEN_INTERACTIVE), ev(60, null, SCREEN_INTERACTIVE));
+        assertEquals(3, (int) agg.analyze(e, NOON + 90 * MIN).pickups.get("2026-10-15"));
+    }
+
+    @Test
     public void pauseOfAnotherAppDoesNotStopCurrent() {
         List<Event> e = Arrays.asList(ev(0, INSTA, ACTIVITY_RESUMED), ev(3, WA, ACTIVITY_PAUSED), ev(9, INSTA, ACTIVITY_PAUSED));
         Map<String, Map<String, Long>> out = agg.aggregate(e, NOON + 60 * MIN);

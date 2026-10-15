@@ -337,6 +337,12 @@ main { padding: clamp(20px, 4vw, 48px); max-width: 1160px; width: 100%; outline:
 details summary { cursor: pointer; font-weight: 700; padding: 6px 0; }
 
 tr.muted td { color: var(--ink-3); }
+.qr-connect { display: grid; grid-template-columns: 168px 1fr; gap: 16px; align-items: center; margin-bottom: 16px; }
+.qr-connect p { margin: 4px 0 10px; font-size: var(--step--1); }
+.qr { background: #fff; border-radius: var(--r-md); padding: 8px; }
+.qr svg { width: 100%; height: auto; display: block; }
+.qr svg path, .qr svg rect[fill="black"] { fill: #1C2A33; }
+@media (max-width: 520px) { .qr-connect { grid-template-columns: 1fr; } .qr { max-width: 220px; } }
 .keybox { display: flex; gap: 8px; align-items: center; background: var(--surface-2); padding: 10px 12px; border-radius: var(--r-sm); }
 .keybox code { flex: 1; overflow-wrap: anywhere; font-size: 13px; }
 code { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: .92em; }

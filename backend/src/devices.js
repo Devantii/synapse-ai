@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const db = require('./db');
+const sessions = require('./sessions');
+const game = require('./gamification');
 
 const hash = (t) => crypto.createHash('sha256').update(t).digest('hex');
 const KINDS = { extension: 'extension', desktop: 'desktop', phone: 'phone' };
@@ -38,7 +40,7 @@ const router = express.Router();
 router.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -66,12 +68,35 @@ router.get('/ping', wrap(async (req, res) => {
   res.json({ ok: true, user: req.device.display_name, device: req.device.name, kind: req.device.kind, usageConsent: await consentOn(req.device.user_id) });
 }));
 
-// GET /api/device/focus -> { focusing, endsAt } so the extension knows when to pause distracting sites.
-router.get('/focus', wrap(async (req, res) => {
-  const row = await db.get('SELECT mode, ends_at FROM focus_state WHERE user_id = ?', [req.device.user_id]);
-  const live = !!row && row.ends_at > Date.now();
-  const focusing = live && row.mode === 'focus';
-  res.json({ focusing, endsAt: focusing ? row.ends_at : null, mode: live ? row.mode : null });
+// GET /api/device/focus -> { focusing, endsAt, mode } so trackers know when a focus block is running.
+router.get('/focus', wrap(async (req, res) => res.json(await sessions.getFocusState(req.device.user_id))));
+
+// ---- phone-only: the Android app runs its own focus timer ----
+const phoneOnly = (req, res, next) =>
+  req.device.kind === 'phone' ? next() : res.status(403).json({ error: 'Only the Android app can do this.' });
+const consent = async (userId, field) => !!(await db.get(`SELECT ${field} AS on_ FROM consents WHERE user_id = ?`, [userId]))?.on_;
+
+// PUT /api/device/focus {mode, endsAt}: start/stop a block from the phone (pauses sites in the browser extension too).
+router.put('/focus', phoneOnly, wrap(async (req, res) => {
+  await sessions.setFocusState(req.device.user_id, req.body || {});
+  res.json({ ok: true });
+}));
+
+// POST /api/device/sessions: save a finished or abandoned phone focus block, with the same rewards as the website.
+router.post('/sessions', phoneOnly, wrap(async (req, res) => {
+  if (!(await consent(req.device.user_id, 'activity_tracking')))
+    return res.status(403).json({ error: 'Turn on "Save focus activity" in Synapse > Privacy to save phone sessions.', consentRequired: 'activity_tracking' });
+  const r = await sessions.record(req.device.user_id, req.body || {});
+  const s = await game.summary(req.device.user_id);
+  res.status(201).json({ earned: r.earned, capped: r.capped, tree: r.tree, newMilestones: r.newMilestones, leveledUp: r.leveledUp,
+    rewards: { points: s.points, level: s.level, currentStreak: s.currentStreak, trees: s.trees } });
+}));
+
+// GET /api/device/summary: the few numbers the phone shows (no private content).
+router.get('/summary', phoneOnly, wrap(async (req, res) => {
+  const s = await game.summary(req.device.user_id);
+  res.json({ points: s.points, level: s.level, nextLevelAt: s.nextLevelAt, currentStreak: s.currentStreak, trees: s.trees,
+    focus: await sessions.getFocusState(req.device.user_id) });
 }));
 
 // GET /api/device/limits -> { limits: [{ app, minutes }] } daily limits set in the dashboard.
