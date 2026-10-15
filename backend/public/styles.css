@@ -454,10 +454,10 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
   background: color-mix(in srgb, var(--lichen) 70%, var(--ink)); color: #fff; font-weight: 700; font-size: 1.3rem; }
 .tile.has-video .tile-face { display: none; }
 .tile-name { position: absolute; left: 8px; bottom: 8px; right: 8px; display: flex; align-items: center; gap: 6px; font-size: .82rem; color: #fff; }
-.tile-name span { background: rgba(10, 16, 20, .62); padding: 3px 8px; border-radius: 99px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-name span { min-width: 0; background: rgba(10, 16, 20, .62); padding: 3px 8px; border-radius: 99px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile-name svg { width: 22px; height: 22px; padding: 4px; border-radius: 50%; background: rgba(10, 16, 20, .62); flex: none; }
 .tile-name svg.mic-off { color: #F2A3AE; }
-.tile-name em { font-style: normal; background: var(--lichen); padding: 3px 8px; border-radius: 99px; margin-left: auto; }
+.tile-name em { flex: none; white-space: nowrap; font-style: normal; background: var(--lichen); padding: 3px 8px; border-radius: 99px; margin-left: auto; }
 .stage-empty { display: flex; gap: 14px; align-items: center; padding: 6px 4px 2px; color: var(--ink-2); }
 .stage-empty[hidden] { display: none; }
 .stage-empty svg { width: 40px; height: 40px; flex: none; color: var(--lichen); }
@@ -796,4 +796,14 @@ body.in-room main { max-width: 1400px; margin: 0 auto; padding-top: clamp(14px, 
   main[data-rtab="chat"] .room-bar, main[data-rtab="people"] .room-bar { display: none; }
   main[data-rtab="chat"] .chat-log { max-height: calc(100vh - 220px); }
   .room-head p { display: none; }
+}
+
+/* Small tiles (2-up on phones): keep the name bar on one line. */
+@media (max-width: 520px) {
+  .tile-name { left: 6px; right: 6px; bottom: 6px; gap: 4px; font-size: .72rem; }
+  .tile-name svg { width: 18px; height: 18px; padding: 3px; }
+  .tile-name span, .tile-name em { padding: 2px 6px; }
+  .tile-face { width: 48px; height: 48px; }
+  .sample-em { top: 6px; left: 6px; font-size: 10px; padding: 2px 6px; }
+  .tile-name .dur { display: none; }
 }

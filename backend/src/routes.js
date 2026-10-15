@@ -454,7 +454,12 @@ post('/coach', coachLimiter, requireConsent('ai_insights', 'AI wellbeing insight
 });
 
 // ---------- rewards ----------
-get('/rewards', async (req, res) => res.json(await game.summary(req.user.id)));
+get('/rewards', async (req, res) => {
+  const out = await game.summary(req.user.id);
+  // Before the first real tree, show what the sample sessions would grow (marked sample, nothing granted).
+  if (!out.trees) { const pv = await game.samplePreview(req.user.id); if (pv) out.sample = pv; }
+  res.json(out);
+});
 
 // ---------- progress stats ----------
 // Everything the Progress page needs, computed from the user's own sessions and screen time.
@@ -879,7 +884,7 @@ get('/leaderboard', async (req, res) => {
 // ---------- sample data ----------
 // Three weeks of clearly marked sample activity so a new account can see Progress and Insights working.
 post('/sample-data', async (req, res) => {
-  res.status(201).json(await sample.add(req.user.id, req.body.today));
+  res.status(201).json(await sample.add(req.user.id, req.body.today, req.body.now));
 });
 del('/sample-data', async (req, res) => {
   await sample.remove(req.user.id);

@@ -69,7 +69,33 @@ function build(today, seed) {
       });
     }
   }
-  return { usage, sessions, moods };
+  // Tasks: a few finished most weekdays, three open for today (one already half done).
+  const tasks = [];
+  const TASKS = ['Revise DBMS unit 3', 'Thesis: related work', 'Fix login bug', 'Read 2 papers', 'Coursera week 4 quiz', 'Outline presentation', 'Clean up notes', 'Practice SQL joins', 'Email supervisor'];
+  for (let back = 13; back >= 1; back--) {
+    const day = shift(today, -back);
+    if ([0, 6].includes(new Date(`${day}T12:00:00Z`).getUTCDay())) continue;
+    const n = 1 + Math.floor(r() * 2);
+    for (let i = 0; i < n; i++) {
+      const est = 1 + Math.floor(r() * 3);
+      tasks.push({ title: TASKS[Math.floor(r() * TASKS.length)], estimate: est, blocks: est, done: 1, day, doneDay: day });
+    }
+  }
+  tasks.push({ title: 'Thesis: methods section', estimate: 3, blocks: 1, done: 0, day: today, doneDay: null });
+  tasks.push({ title: 'Revise DBMS unit 4', estimate: 2, blocks: 0, done: 0, day: today, doneDay: null });
+  tasks.push({ title: 'Reply to group chat about project', estimate: 1, blocks: 0, done: 0, day: today, doneDay: null });
+  // Distractions noticed during focus blocks: phone and social media most, worse in the drifting week.
+  const distractions = [];
+  const KINDS = ['phone', 'phone', 'social', 'social', 'messages', 'thoughts', 'noise', 'tired', 'people'];
+  for (const s of sessions) {
+    if (s.kind !== 'focus' || s.day === today) continue;
+    const back = Math.round((new Date(`${today}T12:00:00Z`) - new Date(`${s.day}T12:00:00Z`)) / 864e5);
+    if (r() < (back <= 6 ? 0.55 : 0.2)) {
+      const at = `${s.start.slice(0, 14)}${pad(Math.min(59, Number(s.start.slice(14, 16)) + 5 + Math.floor(r() * 8)))}`;
+      distractions.push({ day: s.day, at, kind: KINDS[Math.floor(r() * KINDS.length)] });
+    }
+  }
+  return { usage, sessions, moods, tasks, distractions };
 }
 
 const endTs = (start, minutes) => {
@@ -79,9 +105,13 @@ const endTs = (start, minutes) => {
 };
 
 /** Adds sample data ending on the user's local `today`. Replaces earlier sample data; never touches real rows. */
-async function add(userId, today) {
+async function add(userId, today, now) {
   if (!DAY.test(String(today))) today = new Date().toISOString().slice(0, 10);
-  const { usage, sessions, moods } = build(today, userId * 7919 + 17);
+  if (!/^\d{2}:\d{2}$/.test(String(now))) now = '23:59';
+  const built = build(today, userId * 7919 + 17);
+  const { usage, moods, tasks, distractions } = built;
+  // Nothing from later today: a 4 pm visit must not show a block that "ended" at 11 pm.
+  const sessions = built.sessions.filter((s) => s.day !== today || endTs(s.start, s.minutes) <= `${today}T${now}`);
   await remove(userId);
   await db.tx(async (t) => {
     for (const u of usage)
@@ -93,8 +123,14 @@ async function add(userId, today) {
     for (const m of moods) // a real check-in on the same day wins
       await t.run('INSERT INTO mood_checkins (user_id, day, energy, stress, sleep_h, sample) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT (user_id, day) DO NOTHING',
         [userId, m.day, m.energy, m.stress, m.sleep]);
+    let pos = 0;
+    for (const k of tasks)
+      await t.run('INSERT INTO tasks (user_id, title, estimate, blocks_done, done, day, done_day, position, sample) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
+        [userId, k.title, k.estimate, k.blocks, k.done, k.day, k.doneDay, pos++]);
+    for (const d of distractions)
+      await t.run('INSERT INTO distractions (user_id, day, at, kind, sample) VALUES (?, ?, ?, ?, 1)', [userId, d.day, d.at, d.kind]);
   });
-  return { days: 21, usageRows: usage.length, sessions: sessions.length, checkins: moods.length };
+  return { days: 21, usageRows: usage.length, sessions: sessions.length, checkins: moods.length, tasks: tasks.length, distractions: distractions.length };
 }
 
 async function remove(userId) {
@@ -102,6 +138,8 @@ async function remove(userId) {
     await t.run("DELETE FROM app_usage WHERE user_id = ? AND source = 'sample'", [userId]);
     await t.run('DELETE FROM focus_sessions WHERE user_id = ? AND sample = 1', [userId]);
     await t.run('DELETE FROM mood_checkins WHERE user_id = ? AND sample = 1', [userId]);
+    await t.run('DELETE FROM tasks WHERE user_id = ? AND sample = 1', [userId]);
+    await t.run('DELETE FROM distractions WHERE user_id = ? AND sample = 1', [userId]);
   });
 }
 

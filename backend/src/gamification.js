@@ -43,8 +43,8 @@ async function checkBadges(userId) {
   const checks = [
     ['streak_30', r.best_streak >= 30], ['level_10', levelFor(r.points).level >= 10], ['trees_100', r.trees >= 100],
     ['early_bird', async () => (await one("SELECT COUNT(*) AS n FROM focus_sessions WHERE user_id = ? AND kind = 'focus' AND completed = 1 AND sample = 0 AND substr(started_at, 12, 2) < '08'")) > 0],
-    ['tasks_10', async () => (await one('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 1')) >= 10],
-    ['distraction_aware', async () => (await one('SELECT COUNT(*) AS n FROM distractions WHERE user_id = ?')) >= 10],
+    ['tasks_10', async () => (await one('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 1 AND sample = 0')) >= 10],
+    ['distraction_aware', async () => (await one('SELECT COUNT(*) AS n FROM distractions WHERE user_id = ? AND sample = 0')) >= 10],
     ['room_hour', async () => (await one('SELECT COALESCE(SUM(seconds), 0) AS n FROM room_visits WHERE user_id = ?')) >= 3600],
     ['room_10h', async () => (await one('SELECT COALESCE(SUM(seconds), 0) AS n FROM room_visits WHERE user_id = ?')) >= 36000],
     ['first_reply', async () => (await one('SELECT COUNT(*) AS n FROM post_replies WHERE user_id = ?')) > 0],
@@ -120,7 +120,7 @@ function pointsForSession({ kind, actual_min, completed }) {
 
 async function pointsEarnedToday(userId, day, q) {
   // Recompute from sessions on that local day so the cap is robust.
-  const rows = await q.all('SELECT kind, actual_min, completed FROM focus_sessions WHERE user_id = ? AND day = ?', [userId, day]);
+  const rows = await q.all('SELECT kind, actual_min, completed FROM focus_sessions WHERE user_id = ? AND day = ? AND sample = 0', [userId, day]);
   return rows.reduce((s, r) => s + pointsForSession(r), 0);
 }
 
@@ -185,7 +185,7 @@ function recordSession(userId, session) {
     const today = await t.get(
       `SELECT SUM(CASE WHEN kind = 'focus' AND completed = 1 THEN 1 ELSE 0 END) AS f,
               SUM(CASE WHEN kind = 'break' AND completed = 1 THEN 1 ELSE 0 END) AS b
-         FROM focus_sessions WHERE user_id = ? AND day = ?`,
+         FROM focus_sessions WHERE user_id = ? AND day = ? AND sample = 0`,
       [userId, day]
     );
     if ((today.f || 0) >= 4 && (today.b || 0) >= 3) await grant(userId, 'balanced_day', newMilestones, t);
@@ -217,4 +217,39 @@ async function summary(userId) {
   };
 }
 
-module.exports = { recordSession, summary, grant, levelFor, levelTitle, publicLevels, checkBadges, MILESTONES };
+/**
+ * What the garden would look like from the clearly marked sample sessions. Nothing is saved or granted:
+ * it only lets a new account see trees, a level and badges before it has its own history.
+ */
+async function samplePreview(userId) {
+  const rows = await db.all("SELECT kind, actual_min, completed, day, ended_at FROM focus_sessions WHERE user_id = ? AND sample = 1 ORDER BY started_at", [userId]);
+  if (!rows.length) return null;
+  const perDay = {};
+  const garden = [];
+  let n = 0;
+  for (const r of rows) {
+    perDay[r.day] = Math.min(DAILY_POINT_CAP, (perDay[r.day] || 0) + pointsForSession(r));
+    if (r.kind === 'focus' && r.completed && r.actual_min >= 20) garden.push({ id: -(++n), species: speciesFor(r.actual_min), planted_at: String(r.ended_at).replace('T', ' ') + ':00', sample: true });
+  }
+  const points = Object.values(perDay).reduce((a, b) => a + b, 0);
+  const days = [...new Set(rows.filter((r) => r.kind === 'focus' && r.completed).map((r) => r.day))].sort();
+  let best = 0, cur = 0, prev = null;
+  for (const d of days) { cur = prev && dayDiff(prev, d) === 1 ? cur + 1 : 1; best = Math.max(best, cur); prev = d; }
+  const lvl = levelFor(points);
+  const earned = new Set(['first_focus', 'first_break', 'usage_logged', 'tasks_10', 'distraction_aware', 'goal_met']);
+  if (garden.length >= 5) earned.add('trees_5');
+  if (garden.length >= 25) earned.add('trees_25');
+  if (best >= 3) earned.add('streak_3');
+  if (best >= 7) earned.add('streak_7');
+  if (lvl.level >= 5) earned.add('level_5');
+  const byDay = {};
+  for (const r of rows) if (r.completed) { byDay[r.day] = byDay[r.day] || { f: 0, b: 0 }; byDay[r.day][r.kind === 'focus' ? 'f' : 'b']++; }
+  if (Object.values(byDay).some((x) => x.f >= 4 && x.b >= 3)) earned.add('balanced_day');
+  return {
+    points, ...lvl, levelTitle: levelTitle(lvl.level), nextLevelTitle: levelTitle(lvl.level + 1),
+    trees: garden.length, garden, currentStreak: cur, bestStreak: best,
+    earned: [...earned],
+  };
+}
+
+module.exports = { samplePreview, recordSession, summary, grant, levelFor, levelTitle, publicLevels, checkBadges, MILESTONES };

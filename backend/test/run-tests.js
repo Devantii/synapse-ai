@@ -475,7 +475,20 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert(ins.data.daysWithData >= 5 && ins.data.confidence === 'good' && ins.data.ml.factors.length > 0, JSON.stringify(ins.data.counts));
     const stats = await api('GET', '/api/stats', null, S);
     assert(stats.status === 200);
+    // Garden preview, tasks and distractions come with it, but nothing is granted or counted for real.
+    const rw = (await api('GET', '/api/rewards', null, S)).data;
+    assert(rw.trees === 0 && rw.points === 0 && rw.sample && rw.sample.trees > 5 && rw.sample.level > 1 && rw.sample.earned.includes('trees_5'), JSON.stringify(rw.sample && { t: rw.sample.trees, l: rw.sample.level }));
+    assert(!rw.milestones.some((m) => m.achievedAt), 'no real badges from samples');
+    const tk = (await api('GET', `/api/tasks?day=${today}`, null, S)).data;
+    assert(tk.filter((t) => !t.done).length === 3, JSON.stringify(tk));
+    assert(add.data.distractions > 3 && add.data.tasks > 10, JSON.stringify(add.data));
+    // Re-adding at 06:00 drops any block that would end later today.
+    await api('POST', '/api/sample-data', { today, now: '06:00' }, S);
+    const ss = (await api('GET', '/api/sessions?days=1', null, S)).data.filter((x) => x.day === today);
+    assert(ss.every((x) => x.ended_at <= `${today}T06:00`), JSON.stringify(ss.map((x) => x.ended_at)));
     assert((await api('DELETE', '/api/sample-data', null, S)).status === 200);
+    assert((await api('GET', `/api/tasks?day=${today}`, null, S)).data.length === 0, 'sample tasks removed');
+    assert(!(await api('GET', '/api/rewards', null, S)).data.sample, 'garden preview gone');
     const after = await api('GET', `/api/insights?day=${today}`, null, S);
     assert(after.data.daysWithData === 0 && after.data.counts.focusSessions === 0, JSON.stringify(after.data.counts));
     const ch = await api('GET', '/api/checkins', null, S);

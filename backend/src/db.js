@@ -445,6 +445,9 @@ async function migrate() {
   await addColumn('user_prefs', 'weekly_email', 'INTEGER NOT NULL DEFAULT 0');
   await addColumn('user_prefs', 'tz', 'TEXT');
   await addColumn('user_prefs', 'last_report_week', 'TEXT');
+  // v2.1: sample tasks and distractions (removed with "Remove sample data", never count for badges).
+  await addColumn('tasks', 'sample', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('distractions', 'sample', 'INTEGER NOT NULL DEFAULT 0');
 
   // v1.3: device_tokens.kind also allows 'phone' (Android app).
   if (dialect === 'postgres') {

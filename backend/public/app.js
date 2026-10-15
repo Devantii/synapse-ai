@@ -789,6 +789,7 @@ async function renderTodaySide() {
   side.onchange = taskChange;
   state.me.rewards = rewards;
   paintSideLevel();
+  const rw = rewards.sample ? { ...rewards, ...rewards.sample } : rewards; // sample preview until the first real tree
   const today = sessions.filter((s) => s.day === localDay());
   const focusMin = today.filter((s) => s.kind === 'focus' && s.completed).reduce((a, s) => a + s.actual_min, 0);
   const breaks = today.filter((s) => s.kind === 'break' && s.completed).length;
@@ -805,12 +806,12 @@ async function renderTodaySide() {
     <div class="statline">
       <div><b class="num">${fmtMin(focusMin)}</b><span>focused today</span></div>
       <div><b class="num">${breaks}</b><span>breaks taken</span></div>
-      <div><b class="num">${rewards.currentStreak}</b><span>day streak</span></div>
+      <div><b class="num">${rw.currentStreak}</b><span>day streak${rewards.sample ? ' (sample)' : ''}</span></div>
     </div>
     <div>
-      <div style="display:flex;justify-content:space-between;font-size:var(--step--1)"><b>Level ${rewards.level}</b><span class="muted num">${rewards.points} / ${rewards.nextLevelAt} points</span></div>
-      <div class="level-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(rewards.progress * 100)}" aria-label="Progress to next level"><i style="width:${Math.round(rewards.progress * 100)}%"></i></div>
-      <small>${rewards.trees} ${rewards.trees === 1 ? 'tree' : 'trees'} grown · best streak ${rewards.bestStreak} days</small>
+      <div style="display:flex;justify-content:space-between;font-size:var(--step--1)"><b>Level ${rw.level} · ${esc(rw.levelTitle || '')}${rewards.sample ? ` ${sampleTag}` : ''}</b><span class="muted num">${rw.points} / ${rw.nextLevelAt} points</span></div>
+      <div class="level-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(rw.progress * 100)}" aria-label="Progress to next level"><i style="width:${Math.round(rw.progress * 100)}%"></i></div>
+      <small>${rw.trees} ${rw.trees === 1 ? 'tree' : 'trees'} grown · best streak ${rw.bestStreak} ${rw.bestStreak === 1 ? 'day' : 'days'}${rewards.sample ? ' · <a href="#/garden">see the sample garden</a>' : ''}</small>
     </div>
     ${tasksHtml(tasks)}
     <h2 style="margin-top:28px;font-size:var(--step-1)">Today's sessions</h2>
@@ -857,23 +858,49 @@ const SAMPLE = {
     { name: 'Kabir', level: { level: 2, title: 'Sprout', badges: 3 }, focusLeft: 0, here: 12, rooms: ['study-hall', 'gentle-start'] },
     { name: 'Ananya', level: { level: 6, title: 'Branching', badges: 11 }, focusLeft: 31, here: 75, rooms: ['study-hall', 'deep-work', 'night-owls'] },
     { name: 'Arjun', level: { level: 3, title: 'Sapling', badges: 5 }, focusLeft: 7, here: 26, rooms: ['deep-work', 'gentle-start'] },
+    { name: 'Meera', level: { level: 5, title: 'Rooted', badges: 9 }, focusLeft: 22, here: 33, rooms: ['night-owls', 'study-hall'] },
+    { name: 'Dev', level: { level: 4, title: 'Young tree', badges: 8 }, focusLeft: 44, here: 58, rooms: ['deep-work', 'night-owls'] },
+    { name: 'Sana', level: { level: 2, title: 'Sprout', badges: 4 }, focusLeft: 0, here: 5, rooms: ['gentle-start', 'night-owls'] },
   ],
   chat: [
     { author: 'Ananya', body: 'Lo-fi on, phone in the other room. 50 minutes on my thesis, let\'s go 💪', ago: 40 },
     { author: 'Riya', body: 'Starting a 50-minute block on DBMS notes 📚', ago: 36 },
     { author: 'Kabir', body: 'Same here, revising chapter 4. See you all at the break!', ago: 30, reply: { author: 'Riya', body: 'Starting a 50-minute block on DBMS notes 📚' } },
     { author: 'Arjun', body: 'First block of the day done. Taking a 10-minute walk 🌿', ago: 9 },
+    { author: 'Dev', body: 'Second 50 done. Anyone want to sync breaks at :50?', ago: 20 },
+    { author: 'Meera', body: 'In! Hard stop at 11 for me tonight 🌙', ago: 18, reply: { author: 'Dev', body: 'Second 50 done. Anyone want to sync breaks at :50?' } },
+    { author: 'Sana', body: 'Just joined, low energy day so doing 15-minute blocks 🙂', ago: 4 },
   ],
   posts: [
-    { author: 'Ananya', mood: 'proud', body: 'Three 50-minute blocks before lunch and I actually took every break. Feeling human today.', ago: 55,
+    { author: 'Ananya', mood: 'proud', body: 'Three 50-minute blocks before lunch and I actually took every break. Feeling human today.', ago: 55, img: ['desk'], rx: { hug: 6, cheer: 3, same: 1 },
       replies: [{ author: 'Riya', body: 'That\'s huge! The breaks are the hard part for me.' }] },
-    { author: 'Kabir', mood: 'tired', body: 'Scrolled until 1 am again. Trying the bedtime nudge tonight.', ago: 140,
+    { author: 'Meera', mood: 'focused', body: 'Tonight\'s setup: notes, ginger tea, phone face down in the other room. Two blocks on OS scheduling.', ago: 95, img: ['notes', 'tea'], rx: { hug: 4, cheer: 2, same: 0 },
+      replies: [{ author: 'Kabir', body: 'The tea is doing the heavy lifting 😄' }] },
+    { author: 'Kabir', mood: 'tired', body: 'Scrolled until 1 am again. Trying the bedtime nudge tonight.', ago: 140, rx: { hug: 5, cheer: 1, same: 4 },
       replies: [{ author: 'Arjun', body: 'Phone charger outside the bedroom helped me a lot.' }, { author: 'Ananya', body: 'You got this. One night at a time.' }] },
-    { author: 'Riya', mood: 'hopeful', body: 'Week 2 of logging distractions: turns out it\'s WhatsApp, not Instagram 😅', ago: 300, replies: [] },
+    { author: 'Zoya', mood: 'stressed', sensitive: true, cw: 'Exam stress, panic', body: 'Exams in 4 days and I keep panicking at night, heart racing, can\'t sleep. Box breathing helps a bit. Anyone else get this?', ago: 190, rx: { hug: 9, cheer: 0, same: 5 },
+      replies: [{ author: 'Meera', body: 'Yes, every exam season. Writing tomorrow\'s plan before bed calms me down.' }, { author: 'Riya', body: 'Sending a hug. Talk to someone you trust too, it really helps ❤️' }] },
+    { author: 'Arjun', mood: 'calm', body: 'Ten-minute walk between blocks instead of reels. Came back actually fresh.', ago: 230, img: ['walk'], rx: { hug: 7, cheer: 2, same: 3 }, replies: [] },
+    { author: 'Dev', mood: 'hopeful', body: 'Deleted Instagram for the week. Day 3: screen time down 1h 40m and I finished a book chapter.', ago: 270, rx: { hug: 11, cheer: 6, same: 2 },
+      replies: [{ author: 'Riya', body: 'Teach me your ways 🙏' }, { author: 'Arjun', body: 'Did you get urges to reinstall?' }, { author: 'Dev', body: 'Day 1 yes. Now I barely think about it.' }, { author: 'Zoya', body: 'Trying this after exams!' }, { author: 'Ananya', body: 'Proud of you, keep going.' }] },
+    { author: 'Riya', mood: 'hopeful', body: 'Week 2 of logging distractions: turns out it\'s WhatsApp, not Instagram 😅', ago: 300, rx: { hug: 3, cheer: 0, same: 6 }, replies: [] },
+    { author: 'Sana', mood: 'calm', body: 'Rainy evening, rain sound on in the Study hall room, 3 blocks done. Small wins.', ago: 420, img: ['rain'], rx: { hug: 5, cheer: 1, same: 0 }, replies: [] },
   ],
   leaderboard: [{ name: 'Ananya', minutes: 610, level: { level: 6, title: 'Branching', badges: 11 } }, { name: 'Riya', minutes: 470, level: { level: 4, title: 'Young tree', badges: 7 } },
-    { name: 'Arjun', minutes: 300, level: { level: 3, title: 'Sapling', badges: 5 } }, { name: 'Kabir', minutes: 220, level: { level: 2, title: 'Sprout', badges: 3 } }],
+    { name: 'Dev', minutes: 420, level: { level: 4, title: 'Young tree', badges: 8 } }, { name: 'Meera', minutes: 385, level: { level: 5, title: 'Rooted', badges: 9 } },
+    { name: 'Arjun', minutes: 300, level: { level: 3, title: 'Sapling', badges: 5 } }, { name: 'Sana', minutes: 140, level: { level: 2, title: 'Sprout', badges: 4 } }, { name: 'Kabir', minutes: 220, level: { level: 2, title: 'Sprout', badges: 3 } }],
 };
+// Sample "photos" are small drawn scenes, so the demo needs no downloads and shows no real people.
+const SAMPLE_ART = (() => {
+  const w = (body, bg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">${bg}</linearGradient></defs><rect width="400" height="300" fill="url(#g)"/>${body}</svg>`)}`;
+  return {
+    desk: w('<rect x="0" y="210" width="400" height="90" fill="#8b6b4a"/><rect x="110" y="110" width="170" height="105" rx="8" fill="#1f2a33"/><rect x="120" y="120" width="150" height="85" rx="4" fill="#6fb1a0"/><rect x="95" y="212" width="200" height="10" rx="5" fill="#2c3a44"/><path d="M135 140h80M135 155h110M135 170h60" stroke="#e8f4ef" stroke-width="6" stroke-linecap="round"/><rect x="320" y="170" width="34" height="42" rx="6" fill="#c97b4a"/><path d="M337 170c-18-30-6-52 0-60 6 8 18 30 0 60z" fill="#4f8a5b"/><circle cx="60" cy="70" r="26" fill="#fff6d8"/>', '<stop offset="0" stop-color="#f6efe2"/><stop offset="1" stop-color="#e7dcc6"/>'),
+    notes: w('<rect x="70" y="40" width="260" height="220" rx="10" fill="#fffdf6" transform="rotate(-4 200 150)"/><g transform="rotate(-4 200 150)" stroke="#9db4c8" stroke-width="2"><path d="M95 90h210M95 120h210M95 150h210M95 180h210M95 210h210"/></g><g transform="rotate(-4 200 150)" fill="none" stroke="#2f5d8a" stroke-width="4" stroke-linecap="round"><path d="M100 84h90M100 114h140M100 144h70"/><path d="M100 174l8 8 14-16M130 174h80M100 204l8 8 14-16M130 204h60" stroke="#3f8a5f"/></g><rect x="300" y="200" width="70" height="12" rx="6" fill="#e3b341" transform="rotate(30 335 206)"/>', '<stop offset="0" stop-color="#d9e4ec"/><stop offset="1" stop-color="#c6d3dd"/>'),
+    tea: w('<ellipse cx="200" cy="245" rx="120" ry="22" fill="#a77d5a"/><path d="M130 130h140v70a60 60 0 0 1-140 0z" fill="#f4f1ea"/><path d="M270 150c40 0 40 45 0 45" fill="none" stroke="#f4f1ea" stroke-width="12"/><ellipse cx="200" cy="132" rx="70" ry="12" fill="#c28b4a"/><path d="M170 105c-10-20 10-25 0-45M205 100c-10-20 10-25 0-45M238 105c-10-20 10-25 0-45" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".7"/>', '<stop offset="0" stop-color="#3b2f40"/><stop offset="1" stop-color="#5d4a55"/>'),
+    walk: w('<circle cx="300" cy="90" r="38" fill="#ffd27a"/><path d="M0 200q100-60 200 0t200 0v100H0z" fill="#7fae7c"/><path d="M0 230q120-40 240 10t160 0v60H0z" fill="#5d8f5f"/><path d="M180 300c10-40 30-70 70-100" stroke="#d9c7a3" stroke-width="22" fill="none" stroke-linecap="round"/><g fill="#3e6b48"><path d="M60 210l20-60 20 60z"/><path d="M90 205l16-48 16 48z"/><path d="M330 200l18-55 18 55z"/></g>', '<stop offset="0" stop-color="#f7b47a"/><stop offset="1" stop-color="#f9e2c0"/>'),
+    rain: w('<rect x="60" y="40" width="280" height="200" rx="6" fill="#4f6a80"/><path d="M200 40v200M60 140h280" stroke="#2f3f4d" stroke-width="10"/><g stroke="#c9dceb" stroke-width="3" stroke-linecap="round" opacity=".8"><path d="M90 60l-6 18M130 90l-6 18M170 55l-6 18M240 70l-6 18M290 100l-6 18M110 170l-6 18M160 200l-6 18M250 165l-6 18M310 195l-6 18"/></g><rect x="40" y="240" width="320" height="16" rx="4" fill="#7b5b3f"/><rect x="250" y="210" width="40" height="30" rx="6" fill="#e9e1d3"/>', '<stop offset="0" stop-color="#2b3945"/><stop offset="1" stop-color="#3d4f5d"/>'),
+  };
+})();
 const sampleOn = () => !!state.me?.hasSampleData;
 const sampleTag = '<span class="pill sample-pill">sample</span>';
 const sampleAgo = (min) => new Date(Date.now() - min * 60000).toISOString().replace('T', ' ').slice(0, 19);
@@ -1108,7 +1135,7 @@ async function renderRoom(main, roomId) {
   });
   $('#reply-cancel').addEventListener('click', () => setReply(null));
   if (sampleOn() && sampleMembers(roomId).length) {
-    for (const m of SAMPLE.chat.filter((c) => sampleMembers(roomId).some((p) => p.name === c.author)))
+    for (const m of SAMPLE.chat.filter((c) => sampleMembers(roomId).some((p) => p.name === c.author)).sort((a, b) => b.ago - a.ago))
       log.insertAdjacentHTML('beforeend', `<div class="msg sample"><div class="who">${esc(m.author)} ${sampleTag} · ${ago(sampleAgo(m.ago))}</div>
         ${m.reply ? `<div class="quote"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</div>` : ''}<div class="bubble">${esc(m.body)}</div></div>`);
   }
@@ -1280,7 +1307,7 @@ const stage = {
         tile = document.createElement('div');
         tile.className = 'tile';
         tile.dataset.key = key;
-        tile.innerHTML = `<video autoplay playsinline muted></video><div class="tile-face"></div><div class="tile-name"></div>`;
+        tile.innerHTML = `<video autoplay playsinline muted></video><div class="tile-face"></div><em class="sample-em" hidden>sample</em><div class="tile-name"></div>`;
         el.append(tile);
       }
       const mine = key === meId;
@@ -1292,9 +1319,10 @@ const stage = {
       tile.classList.toggle('has-video', showVideo);
       tile.classList.toggle('mine', mine);
       tile.querySelector('.tile-face').textContent = initials(m.name);
+      tile.querySelector('.sample-em').hidden = !m.sample;
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
       tile.querySelector('.tile-name').innerHTML = `${m.muted ? '<svg class="mic-off" aria-label="mic off"><use href="#i-mic-off"/></svg>' : '<svg aria-label="mic on"><use href="#i-mic"/></svg>'}
-        <span>${esc(mine ? 'You' : m.name)}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}</span>${m.sample ? '<em class="sample-em">sample</em>' : ''}${m.focusing ? `<em>${mins != null ? `${mins}m left` : 'focusing'}</em>` : ''}`;
+        <span>${esc(mine ? 'You' : m.name)}${m.joinedAt ? `<small class="dur"> · ${fmtDur(Date.now() - m.joinedAt)}</small>` : ''}</span>${m.focusing ? `<em>${mins != null ? `${mins}m left` : 'focusing'}</em>` : ''}`;
     }
     el.querySelectorAll('.tile').forEach((t) => { if (!keep.has(t.dataset.key)) { const v = t.querySelector('video'); v.srcObject = null; t.remove(); } });
     const empty = document.getElementById('stage-empty');
@@ -1782,8 +1810,12 @@ VIEWS.community = async (main) => {
     feed.insertAdjacentHTML('beforeend', r.posts.map(postHtml).join(''));
     if (reset && sampleOn() && !filtered) feed.insertAdjacentHTML('beforeend', SAMPLE.posts.map((p) => `
       <li class="post sample"><header><b>${esc(p.author)}</b>${sampleTag}<span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood])}</span><time>${ago(sampleAgo(p.ago))}</time></header>
-        <p>${esc(p.body)}</p>
-        ${p.replies.length ? `<div class="replies">${p.replies.map((x) => `<div class="reply"><b>${esc(x.author)}</b> ${sampleTag}<p>${esc(x.body)}</p></div>`).join('')}</div>` : ''}
+        <div class="post-body ${p.sensitive ? 'blurred' : ''}">${p.sensitive ? `<button type="button" class="cw" data-reveal>⚠ ${esc(p.cw)} · Show</button>` : ''}
+          <p>${esc(p.body)}</p>
+          ${p.img ? `<div class="post-images n${p.img.length} ${state.me.prefs?.blurImages && !p.sensitive ? 'blur-img' : ''}">${p.img.map((k) => `<button type="button" class="pimg" data-full="${SAMPLE_ART[k]}" aria-label="Open image"><img src="${SAMPLE_ART[k]}" alt="Sample drawing" width="400" height="300" /></button>`).join('')}</div>` : ''}
+        </div>
+        <div class="reacts">${Object.entries(RX).map(([k, label]) => `<button class="react" data-react="${k}" aria-pressed="false">${label}${p.rx?.[k] ? ` <span class="num">${p.rx[k]}</span>` : ''}</button>`).join('')}</div>
+        ${p.replies.length ? `<div class="replies">${p.replies.length > 3 ? `<button type="button" class="link more-replies" data-all-replies>View all ${p.replies.length} replies</button>` : ''}${p.replies.map((x, i) => `<div class="reply${p.replies.length > 3 && i < p.replies.length - 2 ? ' folded' : ''}"><b>${esc(x.author)}</b> ${sampleTag}<p>${esc(x.body)}</p></div>`).join('')}</div>` : ''}
         <p class="muted" style="font-size:12px;margin:6px 0 0">Sample post, only visible to you while sample data is on.</p></li>`).join(''));
     if (r.posts.length) oldest = r.posts[r.posts.length - 1].id;
     $('#more').hidden = r.posts.length < 15;
@@ -1854,6 +1886,12 @@ VIEWS.community = async (main) => {
     }
     const btn = e.target.closest('[data-react]');
     try {
+      if (btn && li.classList.contains('sample')) { // sample posts react on this screen only
+        const on = btn.getAttribute('aria-pressed') !== 'true', n = btn.querySelector('.num'), count = (n ? +n.textContent : 0) + (on ? 1 : -1);
+        btn.setAttribute('aria-pressed', String(on));
+        btn.innerHTML = `${RX[btn.dataset.react]}${count ? ` <span class="num">${count}</span>` : ''}`;
+        return;
+      }
       if (btn) {
         const r = await api('POST', `/posts/${li.dataset.id}/react`, { kind: btn.dataset.react });
         const n = btn.querySelector('.num');
@@ -2226,7 +2264,7 @@ async function addSampleData(btn) {
   if (btn) btn.disabled = true;
   try {
     state.me.consents = await api('PUT', '/consents', { activity_tracking: true, usage_tracking: true, ai_insights: true });
-    await api('POST', '/sample-data', { today: localDay() });
+    await api('POST', '/sample-data', { today: localDay(), now: new Date().toTimeString().slice(0, 5) });
     state.me = await api('GET', '/me');
     toast('Added 3 weeks of sample data. Remove it any time.');
     route();
@@ -2616,11 +2654,15 @@ async function renderDistractions() {
 
 // ---------------------------------------------------------------- Garden
 VIEWS.garden = async (main) => {
-  const r = await api('GET', '/rewards');
+  const real = await api('GET', '/rewards');
+  // With sample data and no real trees yet, show the garden the sample weeks would grow (clearly marked).
+  const pv = real.sample;
+  const r = pv ? { ...real, ...pv, milestones: real.milestones.map((m) => ({ ...m, achievedAt: m.achievedAt || (pv.earned.includes(m.code) ? 'sample' : null) })) } : real;
   const got = r.milestones.filter((m) => m.achievedAt).length;
   main.innerHTML = `
     <div class="page-head"><div><h1>Garden and badges</h1><p>Every completed focus block of 20 minutes or more plants a tree. Longer blocks grow bigger species. Badges reward healthy habits, not hours of screen time.</p></div>
-      <div class="muted num">${r.trees} ${r.trees === 1 ? 'tree' : 'trees'} · best streak ${r.bestStreak} ${r.bestStreak === 1 ? 'day' : 'days'}</div></div>
+      <div class="muted num">${r.trees} ${r.trees === 1 ? 'tree' : 'trees'} · best streak ${r.bestStreak} ${r.bestStreak === 1 ? 'day' : 'days'}${pv ? ` ${sampleTag}` : ''}</div></div>
+    ${pv ? `<div class="sample-banner"><span><b>Sample garden.</b> This is what the 3 sample weeks would grow. Your real garden, level and badges start with your first focus block, and only those show to others.</span></div>` : ''}
     <section class="panel">
       ${r.garden.length ? `<div class="garden">${r.garden.map((t) => `<figure><svg viewBox="0 0 200 200" role="img" aria-label="${t.species}"><use href="#tree-${t.species}"/></svg><figcaption>${new Date(t.planted_at.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</figcaption></figure>`).join('')}</div>`
         : `<p class="empty">Your garden is empty. Finish a 25-minute focus block on the <a href="#/today">Today</a> page to plant your first sapling.</p>`}
@@ -2634,7 +2676,7 @@ VIEWS.garden = async (main) => {
     </section>
     <section class="panel"><h2 style="font-size:var(--step-1)">Badges <span class="muted num" style="font-weight:400">${got} of ${r.milestones.length}</span></h2>
       <ul class="badges">${r.milestones.map((m) => `<li class="${m.achievedAt ? 'got' : ''}"><span class="badge-icon" aria-hidden="true">${BADGE_ICON[m.code] || '★'}</span>
-        <div><b>${esc(m.title)}</b><small>${esc(m.desc)}</small>${m.achievedAt ? `<small class="when">Earned ${ago(m.achievedAt)}</small>` : ''}</div></li>`).join('')}</ul></section>`;
+        <div><b>${esc(m.title)}</b><small>${esc(m.desc)}</small>${m.achievedAt === 'sample' ? '<small class="when">Sample</small>' : m.achievedAt ? `<small class="when">Earned ${ago(m.achievedAt)}</small>` : ''}</div></li>`).join('')}</ul></section>`;
 };
 
 const BADGE_ICON = { first_focus: '🌱', first_break: '☕', trees_5: '🌳', trees_25: '🌲', trees_100: '🏞️', streak_3: '🔥', streak_7: '📅', streak_30: '🌿',
