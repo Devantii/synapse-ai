@@ -690,7 +690,7 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 @media (max-width: 760px) { .rail-user .lang { display: none; } }
 
 /* ---------- levels + badges ---------- */
-.lvl { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 7px; border-radius: 99px; font-size: 11px; font-weight: 700; color: var(--lichen); background: var(--lichen-soft); white-space: nowrap; vertical-align: 1px; }
+.lvl { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 7px; border-radius: 99px; font-size: 11px; font-weight: 700; color: var(--lichen); background: var(--lichen-soft); white-space: nowrap; vertical-align: 1px; }
 .lvl-t { font-weight: 600; }
 .people .lvl-t, .msg .lvl-t, .lb .lvl-t { display: none; }
 .who-level a { color: var(--lichen); font-weight: 700; text-decoration: none; font-size: 12px; }

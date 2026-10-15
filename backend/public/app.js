@@ -2255,7 +2255,7 @@ VIEWS.garden = async (main) => {
   const got = r.milestones.filter((m) => m.achievedAt).length;
   main.innerHTML = `
     <div class="page-head"><div><h1>Garden and badges</h1><p>Every completed focus block of 20 minutes or more plants a tree. Longer blocks grow bigger species. Badges reward healthy habits, not hours of screen time.</p></div>
-      <div class="muted num">${r.trees} trees · best streak ${r.bestStreak} days</div></div>
+      <div class="muted num">${r.trees} ${r.trees === 1 ? 'tree' : 'trees'} · best streak ${r.bestStreak} ${r.bestStreak === 1 ? 'day' : 'days'}</div></div>
     <section class="panel">
       ${r.garden.length ? `<div class="garden">${r.garden.map((t) => `<figure><svg viewBox="0 0 200 200" role="img" aria-label="${t.species}"><use href="#tree-${t.species}"/></svg><figcaption>${new Date(t.planted_at.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</figcaption></figure>`).join('')}</div>`
         : `<p class="empty">Your garden is empty. Finish a 25-minute focus block on the <a href="#/today">Today</a> page to plant your first sapling.</p>`}
@@ -2275,7 +2275,7 @@ VIEWS.garden = async (main) => {
 const BADGE_ICON = { first_focus: '🌱', first_break: '☕', trees_5: '🌳', trees_25: '🌲', trees_100: '🏞️', streak_3: '🔥', streak_7: '📅', streak_30: '🌿',
   level_5: '🪴', level_10: '🌍', balanced_day: '⚖️', first_post: '💬', usage_logged: '🪞', early_bird: '🌅', tasks_10: '✅', distraction_aware: '🧭',
   room_hour: '👥', room_10h: '🏠', first_reply: '🤝', cheer_5: '📣', buddy: '🫶', goal_met: '🎯' };
-const levelChip = (lv) => (lv ? `<span class="lvl" title="Level ${lv.level} · ${esc(lv.title)} · ${lv.badges} ${lv.badges === 1 ? 'badge' : 'badges'}">Lv ${lv.level}<span class="lvl-t"> · ${esc(lv.title)}</span></span>` : '');
+const levelChip = (lv) => (lv ? `<span class="lvl" title="Level ${lv.level} · ${esc(lv.title)} · ${lv.badges} ${lv.badges === 1 ? 'badge' : 'badges'}">Lv ${lv.level}<span class="lvl-t">· ${esc(lv.title)}</span></span>` : '');
 
 // ---------------------------------------------------------------- Privacy
 VIEWS.privacy = async (main) => {
