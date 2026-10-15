@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const db = require('./db');
+const { sign } = require('./auth');
 const sessions = require('./sessions');
 const game = require('./gamification');
 
@@ -91,6 +92,24 @@ router.post('/sessions', phoneOnly, wrap(async (req, res) => {
   res.status(201).json({ earned: r.earned, capped: r.capped, tree: r.tree, newMilestones: r.newMilestones, leveledUp: r.leveledUp,
     rewards: { points: s.points, level: s.level, currentStreak: s.currentStreak, trees: s.trees } });
 }));
+
+// /api/device/app/*: the Android app reuses a short allowlist of dashboard endpoints (tasks, distractions,
+// suggestions, insights, rewards, buddies' progress) with its phone key. Nothing else is reachable this way:
+// no account, privacy, export or deletion endpoints, and no community content.
+const APP_ALLOW = [
+  ['GET', /^\/tasks$/], ['POST', /^\/tasks$/], ['PUT', /^\/tasks\/\d+$/],
+  ['GET', /^\/distractions$/], ['POST', /^\/distractions$/],
+  ['GET', /^\/suggest-block$/], ['GET', /^\/insights$/], ['GET', /^\/insights\/trend$/], ['GET', /^\/insights\/trends$/],
+  ['GET', /^\/patterns$/], ['GET', /^\/review$/], ['GET', /^\/rewards$/], ['GET', /^\/prefs$/], ['PUT', /^\/prefs$/],
+  ['GET', /^\/buddies$/], ['POST', /^\/buddies\/\d+\/cheer$/],
+];
+router.use('/app', phoneOnly, (req, res, next) => {
+  const path = req.path;
+  if (!APP_ALLOW.some(([m, re]) => m === req.method && re.test(path))) return res.status(404).json({ error: 'Not available to the phone app.' });
+  if (req.method === 'PUT' && path === '/prefs') req.body = { dailyGoalMin: req.body?.dailyGoalMin }; // the phone may only change the goal
+  req.headers.authorization = `Bearer ${sign({ id: req.device.user_id, display_name: req.device.display_name })}`;
+  require('./routes')(req, res, next);
+});
 
 // GET /api/device/summary: the few numbers the phone shows (no private content).
 router.get('/summary', phoneOnly, wrap(async (req, res) => {

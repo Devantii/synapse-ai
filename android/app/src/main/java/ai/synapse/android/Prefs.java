@@ -119,4 +119,16 @@ final class Prefs {
     static void saveSummary(Context c, int points, int level, int streak, int trees) {
         p(c).edit().putString("summary", points + "|" + level + "|" + streak + "|" + trees).apply();
     }
+
+    // ---- v3: language, focus guard, task linked to the running block
+    static String lang(Context c) { return p(c).getString("lang", java.util.Locale.getDefault().getLanguage().equals("hi") ? "hi" : "en"); }
+    static void setLang(Context c, String l) { p(c).edit().putString("lang", l).commit(); }
+    static boolean guard(Context c) { return p(c).getBoolean("guard", false); }
+    static void setGuard(Context c, boolean on) { p(c).edit().putBoolean("guard", on).apply(); }
+    static long timerTask(Context c) { return p(c).getLong("timerTask", 0); }
+    static void setTimerTask(Context c, long id) { p(c).edit().putLong("timerTask", id).apply(); }
+    static long allowedUntil(Context c, String pkg) { return p(c).getLong("allow:" + pkg, 0); }
+    static void allow(Context c, String pkg, long until) { p(c).edit().putLong("allow:" + pkg, until).apply(); }
+    static int guardBlocks(Context c) { return p(c).getInt("guardBlocks", 0); }
+    static void countGuardBlock(Context c) { p(c).edit().putInt("guardBlocks", guardBlocks(c) + 1).apply(); }
 }

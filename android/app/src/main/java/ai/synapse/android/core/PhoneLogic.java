@@ -255,4 +255,35 @@ public final class PhoneLogic {
         int x = ((h % 24) + 24) % 24;
         return x == 0 ? "12 am" : x < 12 ? x + " am" : x == 12 ? "12 pm" : (x - 12) + " pm";
     }
+
+    // ------------------------------------------------------------------ v3: tasks, focus guard
+    /** Adds "taskId" to a session JSON object so the block counts towards that task. */
+    public static String withTask(String sessionJson, long taskId) {
+        if (taskId <= 0 || sessionJson == null || !sessionJson.endsWith("}")) return sessionJson;
+        return sessionJson.substring(0, sessionJson.length() - 1) + ",\"taskId\":" + taskId + "}";
+    }
+
+    /** Categories that the focus guard pauses during a focus block. */
+    public static boolean isDistracting(String category) {
+        return "social".equals(category) || "entertainment".equals(category) || "games".equals(category);
+    }
+
+    /**
+     * The app in front, from recent usage events (oldest first): the package of the last ACTIVITY_RESUMED that
+     * hasn't been paused since. Null if unknown (e.g. the screen is off).
+     */
+    public static String foreground(java.util.List<UsageAggregator.Event> events) {
+        String top = null;
+        for (UsageAggregator.Event e : events) {
+            if (e.type == UsageAggregator.ACTIVITY_RESUMED) top = e.pkg;
+            else if ((e.type == UsageAggregator.ACTIVITY_PAUSED && e.pkg.equals(top)) || e.type == UsageAggregator.SCREEN_NON_INTERACTIVE) top = null;
+        }
+        return top;
+    }
+
+    /** "18:20" style minutes:seconds left. */
+    public static String mmss(long ms) {
+        long s = Math.max(0, (ms + 999) / 1000);
+        return String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60);
+    }
 }

@@ -90,7 +90,7 @@ public final class Payload {
         return sb.append("]}").toString();
     }
 
-    static String quote(String s) {
+    public static String quote(String s) {
         StringBuilder sb = new StringBuilder("\"");
         for (char c : s.toCharArray()) {
             switch (c) {

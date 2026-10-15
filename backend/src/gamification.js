@@ -16,7 +16,69 @@ const MILESTONES = [
   { code: 'balanced_day', title: 'Balanced day', desc: 'Pair 4 focus sessions with 3+ breaks in one day.' },
   { code: 'first_post', title: 'Kind voice', desc: 'Share a check-in with the community.' },
   { code: 'usage_logged', title: 'Honest mirror', desc: 'Log your screen time for a day.' },
+  // v1.9: more badges (checked whenever your rewards are read)
+  { code: 'streak_30', title: 'Evergreen', desc: 'Focus 30 days in a row.' },
+  { code: 'level_10', title: 'Old growth', desc: 'Reach level 10.' },
+  { code: 'trees_100', title: 'Woodland', desc: 'Grow 100 trees.' },
+  { code: 'early_bird', title: 'Early bird', desc: 'Finish a focus block that started before 8 am.' },
+  { code: 'tasks_10', title: 'Finisher', desc: 'Complete 10 tasks.' },
+  { code: 'distraction_aware', title: 'Self-aware', desc: 'Notice and log 10 distractions.' },
+  { code: 'room_hour', title: 'Study buddy', desc: 'Spend an hour in focus rooms.' },
+  { code: 'room_10h', title: 'Regular', desc: 'Spend 10 hours in focus rooms.' },
+  { code: 'first_reply', title: 'Good neighbour', desc: 'Reply kindly to someone\'s check-in.' },
+  { code: 'cheer_5', title: 'Cheerleader', desc: 'Send 5 cheers or nudges to buddies.' },
+  { code: 'buddy', title: 'Accountable', desc: 'Pair up with an accountability buddy.' },
+  { code: 'goal_met', title: 'Goal getter', desc: 'Reach your daily focus goal.' },
 ];
+
+// Level names (shown next to your name in the community).
+const LEVEL_TITLES = ['Seedling', 'Sprout', 'Sapling', 'Young tree', 'Rooted', 'Branching', 'Canopy', 'Old growth', 'Grove keeper', 'Forest guardian'];
+const levelTitle = (level) => LEVEL_TITLES[Math.min(LEVEL_TITLES.length, Math.max(1, level)) - 1];
+
+/** Badges earned from activity outside the timer (tasks, rooms, community). Cheap counts; safe to run often. */
+async function checkBadges(userId) {
+  const one = async (sql, p = [userId]) => Number((await db.get(sql, p))?.n || 0);
+  const r = await ensureRow(userId);
+  const checks = [
+    ['streak_30', r.best_streak >= 30], ['level_10', levelFor(r.points).level >= 10], ['trees_100', r.trees >= 100],
+    ['early_bird', async () => (await one("SELECT COUNT(*) AS n FROM focus_sessions WHERE user_id = ? AND kind = 'focus' AND completed = 1 AND sample = 0 AND substr(started_at, 12, 2) < '08'")) > 0],
+    ['tasks_10', async () => (await one('SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND done = 1')) >= 10],
+    ['distraction_aware', async () => (await one('SELECT COUNT(*) AS n FROM distractions WHERE user_id = ?')) >= 10],
+    ['room_hour', async () => (await one('SELECT COALESCE(SUM(seconds), 0) AS n FROM room_visits WHERE user_id = ?')) >= 3600],
+    ['room_10h', async () => (await one('SELECT COALESCE(SUM(seconds), 0) AS n FROM room_visits WHERE user_id = ?')) >= 36000],
+    ['first_reply', async () => (await one('SELECT COUNT(*) AS n FROM post_replies WHERE user_id = ?')) > 0],
+    ['cheer_5', async () => (await one('SELECT COUNT(*) AS n FROM cheers WHERE from_id = ?')) >= 5],
+    ['buddy', async () => (await one("SELECT COUNT(*) AS n FROM buddies WHERE (requester_id = ? OR addressee_id = ?) AND status = 'accepted'", [userId, userId])) > 0],
+    ['goal_met', async () => {
+      const goal = Number((await db.get('SELECT daily_goal_min FROM user_prefs WHERE user_id = ?', [userId]))?.daily_goal_min || 120);
+      return !!(await db.get(`SELECT day FROM focus_sessions WHERE user_id = ? AND kind = 'focus' AND completed = 1 AND sample = 0
+        GROUP BY day HAVING SUM(actual_min) >= ? LIMIT 1`, [userId, goal]));
+    }],
+  ];
+  const have = new Set((await db.all('SELECT code FROM milestones WHERE user_id = ?', [userId])).map((m) => m.code));
+  const out = [];
+  for (const [code, test] of checks) {
+    if (have.has(code)) continue;
+    if (typeof test === 'function' ? await test() : test) await grant(userId, code, out);
+  }
+  return out;
+}
+
+/** Public level for a batch of users: { id: { level, title, badges } }. */
+async function publicLevels(ids) {
+  const uniq = [...new Set(ids.filter((x) => Number.isInteger(x)))];
+  if (!uniq.length) return {};
+  const marks = uniq.map(() => '?').join(',');
+  const pts = await db.all(`SELECT user_id, points FROM rewards WHERE user_id IN (${marks})`, uniq);
+  const badges = await db.all(`SELECT user_id, COUNT(*) AS n FROM milestones WHERE user_id IN (${marks}) GROUP BY user_id`, uniq);
+  const out = {};
+  for (const id of uniq) {
+    const p = pts.find((r) => r.user_id === id)?.points || 0;
+    const level = levelFor(p).level;
+    out[id] = { level, title: levelTitle(level), badges: Number(badges.find((r) => r.user_id === id)?.n || 0) };
+  }
+  return out;
+}
 
 function levelFor(points) {
   // Level n needs 50*n*(n-1) points total: 0, 100, 300, 600, 1000...
@@ -126,6 +188,7 @@ function recordSession(userId, session) {
 }
 
 async function summary(userId) {
+  await checkBadges(userId).catch((e) => console.error('[badges]', e.message));
   const r = await ensureRow(userId);
   const lvl = levelFor(r.points);
   const achieved = await db.all('SELECT code, achieved_at FROM milestones WHERE user_id = ?', [userId]);
@@ -134,6 +197,8 @@ async function summary(userId) {
   return {
     points: r.points,
     ...lvl,
+    levelTitle: levelTitle(lvl.level),
+    nextLevelTitle: levelTitle(lvl.level + 1),
     trees: r.trees,
     currentStreak: r.current_streak,
     bestStreak: r.best_streak,
@@ -144,4 +209,4 @@ async function summary(userId) {
   };
 }
 
-module.exports = { recordSession, summary, grant, levelFor, MILESTONES };
+module.exports = { recordSession, summary, grant, levelFor, levelTitle, publicLevels, checkBadges, MILESTONES };

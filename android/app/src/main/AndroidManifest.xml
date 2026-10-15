@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Lets the focus timer end exactly on time. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Optional focus guard: shows a "paused" screen over distracting apps during a focus block. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Granted by the user in Settings > Usage access; lets the app read how long apps are open. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -52,6 +56,23 @@
                 <data android:scheme="synapse" android:host="connect" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".BlockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="ai.synapse.android.block"
+            android:theme="@style/AppTheme" />
+
+        <service
+            android:name=".FocusGuardService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Focus timer that pauses apps the user chose to block until the timer ends" />
+        </service>
 
         <receiver
             android:name=".FocusAlarmReceiver"

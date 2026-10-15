@@ -22,11 +22,18 @@ final class FocusController {
     private FocusController() {}
 
     static void start(Context c, String mode, int minutes, String tag) {
+        start(c, mode, minutes, tag, 0);
+    }
+
+    /** taskId > 0 links the block to one of your Synapse tasks. */
+    static void start(Context c, String mode, int minutes, String tag, long taskId) {
         PhoneLogic.Timer t = new PhoneLogic.Timer(mode, minutes, System.currentTimeMillis(), tag);
         Prefs.setTimer(c, t);
+        Prefs.setTimerTask(c, "focus".equals(mode) ? taskId : 0);
         if ("focus".equals(mode)) Prefs.setLastFocusTag(c, t.tag);
         scheduleAlarm(c, t.endsAt);
         Notifs.focusRunning(c, t);
+        if ("focus".equals(mode)) FocusGuardService.start(c);
         background(() -> {
             if (Prefs.configured(c)) {
                 try {
@@ -48,7 +55,10 @@ final class FocusController {
         long now = System.currentTimeMillis();
         if (completed && !t.done(now)) completed = false;
         cancelAlarm(c);
+        FocusGuardService.stop(c);
         Notifs.cancelFocus(c);
+        long taskId = Prefs.timerTask(c);
+        Prefs.setTimerTask(c, 0);
         String reward = "";
         if (Prefs.configured(c)) {
             SynapseApi api = api(c);
@@ -57,7 +67,7 @@ final class FocusController {
             } catch (SynapseApi.ApiException ignored) {
             }
             try {
-                Map<String, Object> r = api.recordSession(t.sessionJson(now, completed, ZoneId.systemDefault()));
+                Map<String, Object> r = api.recordSession(PhoneLogic.withTask(t.sessionJson(now, completed, ZoneId.systemDefault()), taskId));
                 reward = rewardLine(r, t, completed);
                 Map<String, Object> rw = MiniJson.obj(r.get("rewards"));
                 if (!rw.isEmpty()) Prefs.saveSummary(c, (int) MiniJson.num(rw, "points", 0), (int) MiniJson.num(rw, "level", 1),

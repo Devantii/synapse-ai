@@ -50,7 +50,11 @@ async function record(userId, body) {
   const sum = (await db.get('SELECT COALESCE(SUM(actual_min), 0) AS m FROM focus_sessions WHERE user_id = ? AND day = ?', [userId, day])).m;
   if (sum + actualMin > 24 * 60) throw new InputError('That exceeds the minutes in a day.');
   const session = { kind, planned_min: plannedMin, actual_min: actualMin, completed, tag, day, started_at: startedAt, ended_at: endedAt };
-  return game.recordSession(userId, session);
+  const result = await game.recordSession(userId, session);
+  // A completed focus block linked to a task counts towards it (website and phone).
+  if (Number.isInteger(body.taskId) && kind === 'focus' && completed)
+    await db.run('UPDATE tasks SET blocks_done = blocks_done + 1 WHERE id = ? AND user_id = ?', [body.taskId, userId]);
+  return result;
 }
 
 /** Save the running timer (mode 'focus' | 'break' | null) so other devices can react to it. */
