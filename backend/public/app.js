@@ -100,6 +100,48 @@ function setupAuth() {
       $('.form-error', form).textContent = err.message;
     } finally { btn.disabled = false; }
   });
+  setupGoogle();
+}
+
+// "Continue with Google" (Google Identity Services). Shown only when the server has GOOGLE_CLIENT_ID.
+const gsi = {
+  clientId: undefined, handler: null, ready: null,
+  async load() {
+    if (this.clientId === undefined) {
+      try { this.clientId = (await api('GET', '/auth/config')).googleClientId; } catch { this.clientId = null; }
+    }
+    if (!this.clientId) return false;
+    this.ready ??= loadScript('https://accounts.google.com/gsi/client').then(() => {
+      google.accounts.id.initialize({ client_id: this.clientId, callback: (r) => this.handler?.(r.credential), ux_mode: 'popup', auto_select: false, itp_support: true });
+      return true;
+    }).catch(() => { this.ready = null; return false; });
+    return this.ready;
+  },
+  /** Draws Google's button into el; onCredential gets the signed ID token. */
+  async button(el, onCredential, text = 'continue_with') {
+    if (!el || !(await this.load())) return false;
+    this.handler = onCredential;
+    el.innerHTML = '';
+    const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+    google.accounts.id.renderButton(el, { theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'pill', text, logo_alignment: 'left',
+      width: Math.min(400, Math.max(220, el.clientWidth || 320)) });
+    return true;
+  },
+};
+
+async function setupGoogle() {
+  const box = $('#google-auth');
+  const err = $('.form-error', $('#auth-form'));
+  const ok = await gsi.button($('#google-btn'), async (credential) => {
+    err.textContent = '';
+    try {
+      const r = await api('POST', '/auth/google', { credential });
+      state.token = r.token;
+      store.set('synapse.token', r.token);
+      await enterApp(r.created);
+    } catch (e) { err.textContent = e.message; }
+  });
+  box.hidden = !ok;
 }
 
 async function enterApp(isNew) {
@@ -699,7 +741,7 @@ const rtc = {
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = Object.assign(document.createElement('script'), { src, onload: resolve, onerror: () => reject(new Error('Could not load the call library.')) });
+    const s = Object.assign(document.createElement('script'), { src, async: true, onload: resolve, onerror: () => { s.remove(); reject(new Error('Could not load a needed script. Check your connection.')); } });
     document.head.append(s);
   });
 }
@@ -1430,6 +1472,12 @@ VIEWS.privacy = async (main) => {
                ['community', 'Community posts and room messages', 'Removes your check-ins, reactions and chat messages.']]
               .map(([k, t, d]) => `<div style="display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap"><div><b>${t}</b><br><small>${d}</small></div><button class="btn danger" data-scope="${k}">Delete</button></div>`).join('')}
           </div></section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Sign-in methods</h2>
+          <div class="divided">
+            <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap"><div><b>Username</b><br><small>${esc(state.me.user.username)}${state.me.user.hasPassword ? ' · with a password' : ' · no password (Google only)'}</small></div></div>
+            <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap" id="google-link-row"><div><b>Google</b><br><small>${state.me.user.google ? `Linked${state.me.user.email ? ` as ${esc(state.me.user.email)}` : ''}` : state.me.googleClientId ? 'Not linked. Link it to sign in with one tap.' : "Not available on this server."}</small></div>
+              ${state.me.user.google ? (state.me.user.hasPassword ? '<button class="btn" id="google-unlink">Unlink</button>' : '') : state.me.googleClientId ? '<div id="google-link-btn"></div>' : ''}</div>
+          </div></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Delete account</h2><p>Permanently removes your account and all of the data above. This can't be undone.</p>
           <button class="btn danger" id="del-account">Delete my account</button></section>
       </div>
@@ -1451,8 +1499,11 @@ VIEWS.privacy = async (main) => {
       <p style="margin-top:16px">Server address: <code id="key-server"></code></p>
       <p class="muted" id="key-help" style="font-size:var(--step--1)"></p>
       <div class="sheet-actions"><button class="btn primary" value="done">Done</button></div></form></dialog>
-    <dialog id="del-dialog" class="sheet"><form method="dialog" id="del-form"><h2>Delete your account?</h2><p>Enter your password to confirm. Everything is removed immediately.</p>
-      <label class="field">Password <input type="password" name="password" autocomplete="current-password" required /></label>
+    <dialog id="del-dialog" class="sheet"><form method="dialog" id="del-form"><h2>Delete your account?</h2>${state.me.user.hasPassword
+        ? `<p>Enter your password to confirm. Everything is removed immediately.</p>
+      <label class="field">Password <input type="password" name="password" autocomplete="current-password" required /></label>`
+        : `<p>Type your username <b>${esc(state.me.user.username)}</b> to confirm. Everything is removed immediately.</p>
+      <label class="field">Username <input name="confirm" autocomplete="off" required /></label>`}
       <p class="form-error" role="alert"></p>
       <div class="sheet-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn danger" value="confirm" id="del-confirm">Delete account</button></div></form></dialog>`;
 
@@ -1530,12 +1581,20 @@ VIEWS.privacy = async (main) => {
     try { await api('DELETE', '/data', { scope: b.dataset.scope }); toast('Deleted'); state.me = await api('GET', '/me'); }
     catch (err) { fail(err); }
   });
+  gsi.button($('#google-link-btn'), async (credential) => {
+    try { await api('POST', '/account/google', { credential }); toast('Google linked. You can now sign in with it.'); state.me = await api('GET', '/me'); route(); }
+    catch (err) { fail(err); }
+  }, 'signin_with');
+  $('#google-unlink')?.addEventListener('click', async () => {
+    try { await api('DELETE', '/account/google'); toast('Google unlinked'); state.me = await api('GET', '/me'); route(); }
+    catch (err) { fail(err); }
+  });
   const dlg = $('#del-dialog');
   $('#del-account').addEventListener('click', () => { $('.form-error', dlg).textContent = ''; dlg.showModal(); });
   $('#del-confirm').addEventListener('click', async (e) => {
     e.preventDefault();
-    const pw = $('#del-form').elements.password.value;
-    try { await api('DELETE', '/account', { password: pw }); dlg.close(); store.del('synapse.timer'); signOut('Your account and data were deleted.'); }
+    const f = $('#del-form').elements;
+    try { await api('DELETE', '/account', { password: f.password?.value, confirm: f.confirm?.value }); dlg.close(); store.del('synapse.timer'); signOut('Your account and data were deleted.'); }
     catch (err) { $('.form-error', dlg).textContent = err.message; }
   });
 };

@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS users (
   id            ${T.ID},
   username      TEXT NOT NULL UNIQUE,          -- always stored lowercase
   display_name  TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  created_at    TEXT NOT NULL DEFAULT ${T.NOW}
+  password_hash TEXT NOT NULL,                   -- '!' for Google-only accounts (no password)
+  created_at    TEXT NOT NULL DEFAULT ${T.NOW},
+  google_sub    TEXT,                            -- Google account id, when signed in with Google
+  email         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS consents (
@@ -269,6 +271,14 @@ const driver = dialect === 'postgres' ? postgresDriver() : sqliteDriver();
 
 // Upgrades for databases created by older versions. Each step is idempotent.
 async function migrate() {
+  // v1.5: sign in with Google.
+  const cols = dialect === 'postgres'
+    ? (await driver.all("SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'users' AND table_schema = current_schema()")).map((r) => r.name)
+    : (await driver.all('PRAGMA table_info(users)')).map((r) => r.name);
+  if (!cols.includes('google_sub')) await driver.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
+  if (!cols.includes('email')) await driver.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  await driver.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub ON users (google_sub)');
+
   // v1.3: device_tokens.kind also allows 'phone' (Android app).
   if (dialect === 'postgres') {
     await driver.exec(`ALTER TABLE device_tokens DROP CONSTRAINT IF EXISTS device_tokens_kind_check;

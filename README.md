@@ -66,6 +66,7 @@ Set these in `backend/.env` (see `.env.example`). Keep `.env` out of source cont
 | `DB_PATH` | Optional | SQLite file location when `DATABASE_URL` isn't set. |
 | `OPENAI_API_KEY` | Optional | Enables AI-written coach replies. Without it the coach replies from your insights and says so. |
 | `OPENAI_MODEL`, `OPENAI_BASE_URL` | Optional | Any OpenAI-compatible Chat Completions endpoint. |
+| `GOOGLE_CLIENT_ID` | Optional | Turns on "Continue with Google" (sign up / sign in, and linking Google in Privacy). See "Sign in with Google" below. |
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Optional | Run room video and voice through a LiveKit media server (large rooms, more networks). Unset = peer-to-peer. See `infra/livekit/README.md`. |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | Optional | TURN relay for peer-to-peer video/voice on strict networks. Public STUN is used by default. |
 | `TRUST_PROXY` | When behind a proxy | Lets rate limiting see real client IPs. |
@@ -155,3 +156,13 @@ Free plan limits:
 ## Hosting
 
 Any Node host with a persistent disk works (Render, Railway, Fly.io, a VPS). Set `NODE_ENV=production`, `JWT_SECRET`, `DB_PATH` on the persistent disk, and `TRUST_PROXY=1` behind a proxy. Serve over HTTPS: browsers only allow microphone access on HTTPS or `localhost`. With PostgreSQL you can run several instances; add the Socket.IO Redis adapter so rooms work across them.
+
+## Sign in with Google
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → create (or pick) a project.
+2. **APIs & Services → OAuth consent screen**: choose *External*, fill in the app name (Synapse AI) and your email, save. While it's in *Testing*, add the Google accounts that may sign in under *Test users*, or click *Publish app* so anyone can.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID** → *Web application*.
+   Under **Authorized JavaScript origins** add your site, e.g. `https://synapse-ai-xxxx.onrender.com` (and `http://localhost:3000` for local use). No redirect URI is needed.
+4. Copy the **Client ID** (ends in `.apps.googleusercontent.com`) and set it as `GOOGLE_CLIENT_ID` (Render → synapse-ai → Environment). Redeploy.
+
+The "Continue with Google" button then appears on the sign-in screen. First use creates an account (username from the email, display name from Google); existing users can link Google under Privacy → Sign-in methods. The server verifies Google's signed ID token (signature, expiry, audience) with Google's official library and stores only the Google account id and verified email. No client secret is needed.

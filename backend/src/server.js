@@ -22,15 +22,17 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        scriptSrc: ["'self'", 'https://accounts.google.com/gsi/client'],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com', 'https://accounts.google.com/gsi/style'],
+        frameSrc: ['https://accounts.google.com/gsi/'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com'],
         imgSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'", 'ws:', 'wss:', ...voice.cspOrigins()],
+        connectSrc: ["'self'", 'ws:', 'wss:', 'https://accounts.google.com/gsi/', ...voice.cspOrigins()],
         mediaSrc: ["'self'", 'blob:'],
         workerSrc: ["'self'", 'blob:'],
       },
     },
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }, // the Google sign-in popup
   })
 );
 // Allow the mic and camera only for this origin (live rooms); no geolocation.

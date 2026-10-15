@@ -35,3 +35,6 @@ services:
         fromDatabase:
           name: synapse-db
           property: connectionString
+      # Optional: "Continue with Google". Paste your OAuth client ID in the Render dashboard.
+      - key: GOOGLE_CLIENT_ID
+        sync: false

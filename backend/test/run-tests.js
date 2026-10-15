@@ -73,6 +73,64 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('GET', '/api/me', null, 'garbage')).status === 401);
   });
 
+  console.log('Sign in with Google');
+  const google = require('../src/google');
+  // Stand-in for Google's token check: "gtest|<sub>|<email>|<name>" (real tokens are verified with Google's keys).
+  google._setVerifier(async (t) => {
+    const [tag, sub, email, name] = t.split('|');
+    if (tag !== 'gtest-credential-xxxxxxxx') throw new Error('bad token');
+    return { sub, email, emailVerified: true, name };
+  });
+  const gcred = (sub, email, name) => `gtest-credential-xxxxxxxx|${sub}|${email}|${name}`;
+  let G;
+  await test('auth config advertises Google', async () => {
+    const r = await api('GET', '/api/auth/config');
+    assert(r.status === 200 && 'googleClientId' in r.data);
+  });
+  await test('first Google sign-in creates an account', async () => {
+    const r = await api('POST', '/api/auth/google', { credential: gcred('g-111', 'Priya.S@gmail.com', 'Priya Sharma') });
+    assert(r.status === 201 && r.data.created === true && r.data.token, JSON.stringify(r.data));
+    assert(r.data.user.username === 'priya.s' && r.data.user.displayName === 'Priya Sharma', JSON.stringify(r.data.user));
+    G = r.data.token;
+    const me = await api('GET', '/api/me', null, G);
+    assert(me.data.user.google === true && me.data.user.hasPassword === false && me.data.user.email === 'Priya.S@gmail.com');
+  });
+  await test('second Google sign-in returns the same account', async () => {
+    const r = await api('POST', '/api/auth/google', { credential: gcred('g-111', 'Priya.S@gmail.com', 'Priya Sharma') });
+    assert(r.status === 200 && r.data.created === false && r.data.user.username === 'priya.s');
+  });
+  await test('a different Google user with the same email name gets a free username', async () => {
+    const r = await api('POST', '/api/auth/google', { credential: gcred('g-222', 'priya.s@outlook.com', 'Priya S') });
+    assert(r.status === 201 && r.data.user.username === 'priya.s2', JSON.stringify(r.data.user));
+  });
+  await test('bad Google credential rejected', async () => {
+    const r = await api('POST', '/api/auth/google', { credential: 'not-a-real-google-credential-token' });
+    assert(r.status === 400, 'got ' + r.status);
+  });
+  await test('Google-only account cannot use password login', async () => {
+    const r = await api('POST', '/api/auth/login', { username: 'priya.s', password: '!' });
+    assert(r.status === 401 && /Google/.test(r.data.error), JSON.stringify(r.data));
+  });
+  await test('link Google to a password account, then sign in with Google', async () => {
+    let r = await api('POST', '/api/account/google', { credential: gcred('g-alice', 'alice@gmail.com', 'Alice') }, A);
+    assert(r.status === 200, JSON.stringify(r.data));
+    r = await api('POST', '/api/auth/google', { credential: gcred('g-alice', 'alice@gmail.com', 'Alice') });
+    assert(r.status === 200 && r.data.user.username === 'alice');
+    r = await api('POST', '/api/account/google', { credential: gcred('g-111', 'x@gmail.com', 'X') }, A);
+    assert(r.status === 409, 'Google account used elsewhere must be refused');
+    r = await api('DELETE', '/api/account/google', null, A);
+    assert(r.status === 200);
+    r = await api('POST', '/api/auth/google', { credential: gcred('g-alice', 'alice@gmail.com', 'Alice') });
+    assert(r.status === 201 && r.data.user.username !== 'alice', 'unlinked: a new account, not Alice');
+  });
+  await test("Google-only account can't unlink Google, and deletes by typing its username", async () => {
+    assert((await api('DELETE', '/api/account/google', null, G)).status === 400);
+    assert((await api('DELETE', '/api/account', { confirm: 'wrong' }, G)).status === 400);
+    const r = await api('DELETE', '/api/account', { confirm: 'Priya.S' }, G);
+    assert(r.status === 200, JSON.stringify(r.data));
+    assert((await api('GET', '/api/me', null, G)).status === 401);
+  });
+
   console.log('Consent gates');
   await test('session save blocked until consent', async () => {
     const r = await api('POST', '/api/sessions', { kind: 'focus', plannedMin: 25, actualMin: 25, completed: true, day: today, startedAt: ts(today, '09:00'), endedAt: ts(today, '09:25') }, A);

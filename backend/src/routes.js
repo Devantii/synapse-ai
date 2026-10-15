@@ -8,6 +8,7 @@ const { analyze } = require('./analytics');
 const coach = require('./coach');
 const devices = require('./devices');
 const voice = require('./voice');
+const google = require('./google');
 const { dedupe, appKey, SOURCE_LABEL } = require('./usage');
 const sessions = require('./sessions');
 
@@ -90,9 +91,62 @@ post('/auth/register', authLimiter, async (req, res) => {
 post('/auth/login', authLimiter, async (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const user = await db.get('SELECT * FROM users WHERE username = ?', [username]);
-  const ok = user && (await bcrypt.compare(String(req.body.password || ''), user.password_hash));
-  if (!ok) throw new HttpError(401, 'Incorrect username or password.');
+  const ok = user && hasPassword(user) && (await bcrypt.compare(String(req.body.password || ''), user.password_hash));
+  if (!ok) throw new HttpError(401, user && !hasPassword(user) ? 'This account uses "Continue with Google".' : 'Incorrect username or password.');
   res.json({ token: sign(user), user: { id: user.id, username: user.username, displayName: user.display_name } });
+});
+
+const hasPassword = (u) => typeof u.password_hash === 'string' && u.password_hash.startsWith('$2');
+const authReply = (u) => ({ token: sign(u), user: { id: u.id, username: u.username, displayName: u.display_name } });
+
+// Public sign-in options for the login screen.
+router.get('/auth/config', (req, res) => res.json({ googleClientId: google.enabled ? google.clientId : null }));
+
+async function googleIdentity(credential) {
+  if (!google.enabled) throw new HttpError(404, 'Google sign-in is not set up on this server.');
+  if (typeof credential !== 'string' || credential.length < 20 || credential.length > 4096) throw new HttpError(400, 'Missing Google credential.');
+  let g;
+  try {
+    g = await google.verify(credential);
+  } catch {
+    throw new HttpError(400, 'Google sign-in failed. Please try again.');
+  }
+  if (!g?.sub) throw new HttpError(400, 'Google sign-in failed. Please try again.');
+  return g;
+}
+
+/** A free username from the Google email or name, e.g. "asha.k" or "asha.k2". */
+async function freeUsername(g) {
+  const base = (String(g.email || g.name || 'member').split('@')[0].toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 20) || 'member').padEnd(3, '0');
+  for (let i = 0; i < 50; i++) {
+    const name = i === 0 ? base : `${base.slice(0, 20)}${i + 1}`;
+    if (!(await db.get('SELECT 1 AS ok FROM users WHERE username = ?', [name]))) return name;
+  }
+  return `${base.slice(0, 14)}${Date.now().toString(36).slice(-6)}`;
+}
+
+// POST /auth/google { credential }: sign in, or create an account on first use.
+post('/auth/google', authLimiter, async (req, res) => {
+  const g = await googleIdentity(req.body.credential);
+  let user = await db.get('SELECT * FROM users WHERE google_sub = ?', [g.sub]);
+  if (user) return res.json({ ...authReply(user), created: false });
+  const displayName = String(g.name || g.email?.split('@')[0] || 'Member').trim().slice(0, 40) || 'Member';
+  let id;
+  for (let attempt = 0; ; attempt++) {
+    const username = await freeUsername(g);
+    try {
+      id = await db.insert('INSERT INTO users (username, display_name, password_hash, google_sub, email) VALUES (?, ?, ?, ?, ?)',
+        [username, displayName, '!', g.sub, g.emailVerified ? g.email : null]);
+      break;
+    } catch (e) {
+      if (!/unique|duplicate/i.test(e.message) || attempt > 3) throw e;
+      user = await db.get('SELECT * FROM users WHERE google_sub = ?', [g.sub]); // same Google account signed up twice at once
+      if (user) return res.json({ ...authReply(user), created: false });
+    }
+  }
+  await consents(id);
+  user = await db.get('SELECT * FROM users WHERE id = ?', [id]);
+  res.status(201).json({ ...authReply(user), created: true });
 });
 
 router.get('/health', (req, res) => res.json({ ok: true, db: db.dialect, llm: coach.llmEnabled, voice: voice.enabled ? 'livekit' : 'mesh' }));
@@ -101,10 +155,12 @@ router.get('/health', (req, res) => res.json({ ok: true, db: db.dialect, llm: co
 router.use(requireAuth);
 
 get('/me', async (req, res) => {
-  const u = await db.get('SELECT id, username, display_name, created_at FROM users WHERE id = ?', [req.user.id]);
+  const u = await db.get('SELECT id, username, display_name, created_at, password_hash, google_sub, email FROM users WHERE id = ?', [req.user.id]);
   if (!u) return res.status(401).json({ error: 'Account no longer exists.' });
   res.json({
-    user: { id: u.id, username: u.username, displayName: u.display_name, createdAt: u.created_at },
+    user: { id: u.id, username: u.username, displayName: u.display_name, createdAt: u.created_at,
+      hasPassword: hasPassword(u), google: !!u.google_sub, email: u.email || null },
+    googleClientId: google.enabled ? google.clientId : null,
     consents: await consents(u.id),
     rewards: await game.summary(u.id),
     llmEnabled: coach.llmEnabled,
@@ -511,10 +567,30 @@ del('/data', async (req, res) => {
   res.json({ ok: true, deleted: scope });
 });
 
+// ---------- Google link ----------
+// Link Google to an existing account so it can sign in with either.
+post('/account/google', async (req, res) => {
+  const g = await googleIdentity(req.body.credential);
+  const other = await db.get('SELECT id FROM users WHERE google_sub = ?', [g.sub]);
+  if (other && other.id !== req.user.id) throw new HttpError(409, 'That Google account is already used by another Synapse account.');
+  await db.run('UPDATE users SET google_sub = ?, email = ? WHERE id = ?', [g.sub, g.emailVerified ? g.email : null, req.user.id]);
+  res.json({ ok: true, email: g.emailVerified ? g.email : null });
+});
+del('/account/google', async (req, res) => {
+  const u = await db.get('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
+  if (!hasPassword(u)) throw new HttpError(400, "Google is this account's only way to sign in, so it can't be unlinked.");
+  await db.run('UPDATE users SET google_sub = NULL, email = NULL WHERE id = ?', [req.user.id]);
+  res.json({ ok: true });
+});
+
 del('/account', async (req, res) => {
-  const user = await db.get('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
-  if (!user || !(await bcrypt.compare(String(req.body.password || ''), user.password_hash)))
-    throw new HttpError(401, 'Password is incorrect.');
+  const user = await db.get('SELECT username, password_hash FROM users WHERE id = ?', [req.user.id]);
+  if (!user) throw new HttpError(401, 'Account no longer exists.');
+  if (hasPassword(user)) {
+    if (!(await bcrypt.compare(String(req.body.password || ''), user.password_hash))) throw new HttpError(401, 'Password is incorrect.');
+  } else if (String(req.body.confirm || '').trim().toLowerCase() !== user.username) {
+    throw new HttpError(400, `Type your username (${user.username}) to confirm.`);
+  }
   await db.run('DELETE FROM users WHERE id = ?', [req.user.id]); // ON DELETE CASCADE removes everything
   res.json({ ok: true });
 });

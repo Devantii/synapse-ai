@@ -33,6 +33,10 @@
         <button role="tab" aria-selected="true" data-auth-tab="login">Sign in</button>
         <button role="tab" aria-selected="false" data-auth-tab="register">Create account</button>
       </div>
+      <div class="google-auth" id="google-auth" hidden>
+        <div id="google-btn" class="google-btn"></div>
+        <div class="or"><span>or use a username</span></div>
+      </div>
       <form id="auth-form" novalidate>
         <label class="field" data-only="register">Your name
           <input name="displayName" autocomplete="nickname" maxlength="40" />

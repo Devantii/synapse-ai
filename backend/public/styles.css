@@ -471,3 +471,9 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
   .stage[data-count="1"] { grid-template-columns: 1fr; }
   .call-bar .btn { flex: 1 1 auto; }
 }
+
+/* ---------- Continue with Google ---------- */
+.google-auth { margin: 18px 0 4px; }
+.google-btn { min-height: 44px; display: flex; justify-content: center; }
+.or { display: flex; align-items: center; gap: 12px; margin: 16px 0 4px; color: var(--ink-3); font-size: var(--step--1); }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
