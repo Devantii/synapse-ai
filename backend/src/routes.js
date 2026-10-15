@@ -586,6 +586,10 @@ get('/export', async (req, res) => {
     roomMessages: await q('SELECT room_id, body, created_at FROM room_messages WHERE user_id = ? ORDER BY id'),
     tasks: await q('SELECT title, estimate, blocks_done, done, day, done_day FROM tasks WHERE user_id = ? ORDER BY id'),
     preferences: await prefs(id),
+    distractions: await q('SELECT day, at, kind, note FROM distractions WHERE user_id = ? ORDER BY id'),
+    buddies: await db.all(`SELECT u.display_name AS name, b.status, b.created_at FROM buddies b JOIN users u
+      ON u.id = CASE WHEN b.requester_id = ? THEN b.addressee_id ELSE b.requester_id END WHERE b.requester_id = ? OR b.addressee_id = ?`, [id, id, id]),
+    cheersReceived: await q('SELECT kind, created_at FROM cheers WHERE to_id = ? ORDER BY id'),
     communityReplies: await q('SELECT post_id, body, created_at FROM post_replies WHERE user_id = ? ORDER BY id'),
     connectedDevices: await q('SELECT name, kind, created_at, last_used_at, revoked_at FROM device_tokens WHERE user_id = ? ORDER BY id'),
   };
@@ -594,7 +598,7 @@ get('/export', async (req, res) => {
 });
 
 const DELETE_SCOPES = {
-  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks'],
+  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
   community: ['posts', 'post_replies', 'reactions', 'room_messages'],
@@ -713,6 +717,9 @@ del('/account', async (req, res) => {
   await db.run('DELETE FROM users WHERE id = ?', [req.user.id]); // ON DELETE CASCADE removes everything
   res.json({ ok: true });
 });
+
+// ---------- burnout-prevention extras (extras.js) ----------
+require('./extras')({ get, post, del, HttpError, text, intId, requireConsent, prefs, db, analyze, game });
 
 // ---------- errors ----------
 router.use((err, req, res, next) => {

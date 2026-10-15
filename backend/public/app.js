@@ -188,6 +188,8 @@ function connectSocket() {
   s.on('rtc:signal', (m) => rtc.onSignal(m));
   s.on('audio:peer-left', ({ socketId }) => rtc.dropPeer(socketId));
   s.on('connect', () => { if (rooms.current) s.emit('room:join', { roomId: rooms.current }); });
+  s.on('buddy:cheer', (m) => { toast(`${m.text}.`, 'win'); chime(); if (currentView() === 'community') renderBuddies(); });
+  s.on('buddy:request', (m) => { toast(`${m.from} wants to be accountability buddies. See Community.`); if (currentView() === 'community') renderBuddies(); });
 }
 const emitAck = (ev, data) => new Promise((resolve) => state.socket ? state.socket.timeout(8000).emit(ev, data, (err, r) => resolve(err ? { error: 'Connection timed out.' } : r)) : resolve({ error: 'Not connected.' }));
 
@@ -229,6 +231,8 @@ window.addEventListener('pagehide', () => foreground.flush(true));
 
 // ---------------------------------------------------------------- timer
 const PRESETS = { focus: [15, 25, 50], break: [5, 10, 15] };
+const DISTRACT = { phone: 'Phone', social: 'Social media', messages: 'Messages', thoughts: 'Wandering thoughts', people: 'Someone interrupted', noise: 'Noise', tired: 'Tired or hungry', other: 'Other' };
+let distractCount = 0;
 const timer = {
   s: store.get('synapse.timer') || { mode: 'focus', planned: 25, running: false, startedAt: null, endsAt: null, tag: '' },
   withered: false,
@@ -434,12 +438,17 @@ function paintTimer() {
     ctr.dataset.key = key;
     ctr.innerHTML = timer.s.running
       ? timer.s.mode === 'focus'
-        ? `<button class="btn" data-act="giveup">Give up</button>`
+        ? `<button class="btn" data-act="distracted" aria-expanded="false">Got distracted?</button><button class="btn" data-act="giveup">Give up</button>
+           <div class="distract-pick" id="distract-pick" hidden><p>What pulled you away? Tap it, then come straight back. The timer keeps going.</p>
+             <div class="chips">${Object.entries(DISTRACT).map(([k, v]) => `<button type="button" class="chip" data-distract="${k}">${v}</button>`).join('')}</div></div>
+           <small class="muted distract-count" id="distract-count">${distractCount ? `${distractCount} logged this block` : ''}</small>`
         : `<button class="btn" data-act="endbreak">End break</button>`
       : timer.s.mode === 'focus'
         ? `<button class="btn grow" data-act="start">Start ${timer.s.planned}-minute focus</button><button class="btn quiet" data-act="tobreak">Take a break instead</button>`
         : `<button class="btn rest" data-act="start">Start ${timer.s.planned}-minute break</button><button class="btn quiet" data-act="tofocus">Skip break</button>`;
     $('.presets').hidden = timer.s.running;
+    if ($('#suggest')) $('#suggest').hidden = timer.s.running || timer.s.mode !== 'focus';
+    if (timer.s.running) distractCount = timer.s.mode === 'focus' ? distractCount : 0; else distractCount = 0;
     $('.presets').innerHTML = PRESETS[timer.s.mode].map((m) => `<button class="chip" aria-pressed="${m === timer.s.planned}" data-preset="${m}">${m} min</button>`).join('');
     $('#tag-field').hidden = timer.s.running || timer.s.mode !== 'focus';
     breakGuide.sync();
@@ -583,6 +592,7 @@ VIEWS.today = async (main) => {
           <div class="plot-time" role="timer" aria-live="off"><div class="digits num">25:00</div><div class="phase"></div></div>
         </div>
         <div class="chips presets"></div>
+        <p class="suggest" id="suggest" hidden></p>
         <label class="field" id="tag-field" style="width:min(320px,100%);margin:0">What are you working on? <small>Optional</small>
           <input id="tag" maxlength="40" placeholder="Chapter 3 notes" value="${esc(timer.s.tag)}" /></label>
         <div class="timer-controls"></div>
@@ -602,8 +612,12 @@ VIEWS.today = async (main) => {
     if (act === 'endbreak') timer.stop(false);
     if (act === 'tobreak') timer.setMode('break');
     if (act === 'tofocus') timer.setMode('focus');
+    if (act === 'distracted') { const pk = $('#distract-pick'); pk.hidden = !pk.hidden; b.setAttribute('aria-expanded', String(!pk.hidden)); }
+    if (b.dataset.distract) logDistraction(b.dataset.distract);
+    if (b.dataset.suggest) { timer.s.planned = +b.dataset.suggest; timer.save(); $('.timer-controls').dataset.key = ''; paintTimer(); loadSuggestion(); }
   });
   paintTimer();
+  loadSuggestion();
   await renderTodaySide();
 };
 
@@ -620,7 +634,10 @@ async function renderTodaySide() {
   const breaks = today.filter((s) => s.kind === 'break' && s.completed).length;
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  let warning = null;
+  if (state.me.consents.ai_insights) { try { warning = (await api('GET', `/insights/trend?day=${localDay()}`)).warning; } catch {} }
   side.innerHTML = `
+    ${warning ? `<a class="warn-banner ${warning.level}" href="#/insights"><b>Early warning.</b> ${esc(warning.text)} <span>See why →</span></a>` : ''}
     <h1>${greet}, ${esc(state.me.user.displayName)}.</h1>
     <p class="muted">${hour >= 22 ? "It's late. A short wind-down session is better than a long push." : 'Work in blocks and take the break when the timer offers it.'}</p>
     ${goalHtml(focusMin)}
@@ -663,6 +680,28 @@ async function renderLeaderboard() {
   $('#lb-opt').onchange = async (e) => {
     try { state.me.prefs = await api('PUT', '/prefs', { leaderboard: e.target.checked }); renderLeaderboard(); } catch (err) { fail(err); }
   };
+}
+
+// Distraction log: tap what pulled you away without stopping the block.
+async function logDistraction(kind) {
+  $('#distract-pick').hidden = true;
+  try {
+    await api('POST', '/distractions', { kind, at: localTs() });
+    distractCount++;
+    const c = $('#distract-count'); if (c) c.textContent = `${distractCount} logged this block`;
+    toast(`Noted. Back to it: ${fmtMin(timer.remaining() / 60000)} left.`);
+  } catch (e) { fail(e); }
+}
+
+// Smart block length: based on what you finish at this time of day and today's check-in.
+async function loadSuggestion() {
+  const el = $('#suggest');
+  if (!el || timer.s.running || timer.s.mode !== 'focus') return;
+  try {
+    const r = await api('GET', `/suggest-block?day=${localDay()}&hour=${new Date().getHours()}`);
+    el.innerHTML = `<span><b>Suggested: ${r.minutes} min.</b> ${esc(r.reason)}</span>${r.minutes !== timer.s.planned ? `<button class="link" data-suggest="${r.minutes}">Use ${r.minutes} min</button>` : ''}`;
+    el.hidden = timer.s.running || timer.s.mode !== 'focus';
+  } catch { el.hidden = true; }
 }
 
 // Daily focus goal.
@@ -1236,6 +1275,7 @@ VIEWS.community = async (main) => {
           <button class="btn primary wide">Post check-in</button>
         </form>
         <p class="muted" style="margin-top:12px;font-size:var(--step--1)">Posting as <b>${state.me.consents.community_profile ? esc(state.me.user.displayName) : 'Anonymous member'}</b>. Change this in <a href="#/privacy">Privacy</a>.</p>
+        <div class="buddies" id="buddies"></div>
       </aside>
     </div>`;
   const feed = $('#feed');
@@ -1323,6 +1363,7 @@ VIEWS.community = async (main) => {
       paintReplyCount(li);
     } catch (err) { fail(err); } finally { btn.disabled = false; }
   });
+  renderBuddies();
   const onNew = () => { $('#new-banner').hidden = false; };
   $('#new-banner').addEventListener('click', async () => { $('#new-banner').hidden = true; oldest = null; await load(true); });
   state.socket?.on('community:new', onNew);
@@ -1598,6 +1639,7 @@ VIEWS.progress = async (main) => {
   main.innerHTML = `
     <div class="page-head"><div><h1>Progress</h1><p>Your focus patterns over the last six months. Hover or tap any square or bar for details.</p></div></div>
     ${sampleBanner(false)}
+    <section class="panel review" id="review"></section>
     <div class="progress stack">
       <div class="statline progress-stats">
         <div><b class="num">${fmtMin(t.focusMinutes)}</b><span>focused in 6 months</span></div>
@@ -1639,6 +1681,7 @@ VIEWS.progress = async (main) => {
       </div>
     </div>`;
   wireTips($('.progress', main));
+  renderReview();
 };
 
 // ---------------------------------------------------------------- Insights
@@ -1703,8 +1746,10 @@ VIEWS.insights = async (main) => {
             <p style="margin:0">Load score ${ins.score}/100, where lower is calmer. Confidence is <b>${ins.confidence}</b>: ${ins.daysWithData} ${ins.daysWithData === 1 ? 'day' : 'days'} with data, ${ins.counts.focusSessions} focus sessions, ${ins.counts.checkins} check-ins.</p>
             ${ins.confidence !== 'good' ? `<p class="muted" style="margin:8px 0 0;font-size:var(--step--1)">Log screen time and use the timer on a few more days for a steadier reading.</p>` : ''}</div>
         </section>
+        <section class="panel" id="trend-panel"><h2 style="font-size:var(--step-1)">Early warning</h2><p class="muted">Loading the last 14 days…</p></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Suggestions for this week</h2>
           <ul class="recs">${ins.recommendations.map((r) => `<li class="rec" data-p="${r.priority}"><h3>${esc(r.title)}</h3><p>${esc(r.action)}</p><div class="because">Because: ${esc(r.because)}.</div></li>`).join('')}</ul></section>
+        <section class="panel" id="patterns-panel"></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">What influenced the score</h2>
           <p class="muted" style="font-size:var(--step--1)">Each bar shows how far one pattern pushed the machine-learning estimate up (towards overload) or down, compared with a typical week.</p>
           ${ins.ml.factors.length ? ins.ml.factors.map((f) => {
@@ -1729,6 +1774,7 @@ VIEWS.insights = async (main) => {
             <label class="field">Hours slept last night <input name="sleep" type="number" step="0.5" min="0" max="16" value="${todayCheck?.sleep_h ?? ''}" inputmode="decimal" /></label>
             <button class="btn primary wide">${todayCheck ? 'Update check-in' : 'Save check-in'}</button>
           </form></section>
+        <section class="panel" id="distract-panel"></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Ask the coach</h2>
           <p class="muted" style="font-size:var(--step--1)">${state.me.llmEnabled ? 'Replies come from an AI model that sees your summary above, not your raw data.' : 'No AI provider is configured on this server, so replies are rule-based from your insights.'}</p>
           <div class="coach-log" id="coach-log" aria-live="polite"></div>
@@ -1737,6 +1783,7 @@ VIEWS.insights = async (main) => {
       </div>
     </div>`;
 
+  renderTrend(); renderPatterns(); renderDistractions();
   const picked = { energy: todayCheck?.energy, stress: todayCheck?.stress };
   $$('[data-scale]').forEach((sc) => sc.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -1770,6 +1817,119 @@ VIEWS.insights = async (main) => {
     } catch (err) { fail(err); } finally { btn.disabled = false; }
   });
 };
+
+// Weekly review (Progress page).
+async function renderReview() {
+  const el = $('#review');
+  if (!el) return;
+  let r;
+  try { r = await api('GET', `/review?day=${localDay()}`); } catch { el.hidden = true; return; }
+  const chg = (x, goodUp = true) => (x == null ? '' : `<span class="chg ${(x > 0) === goodUp ? 'good' : 'bad'}">${x > 0 ? '▲' : '▼'} ${Math.abs(Math.round(x * 100))}%</span>`);
+  el.innerHTML = `<h2 style="font-size:var(--step-1)">Your week in review <small class="muted">${shortDate(r.from)} – ${shortDate(r.to)}</small></h2>
+    <div class="review-grid">
+      <div><b class="num">${fmtMin(r.focusMin)}</b><span>focused ${chg(r.focusChange)}</span></div>
+      <div><b class="num">${r.activeDays}/7</b><span>days with focus</span></div>
+      <div><b class="num">${r.screenAvgMin != null ? fmtMin(r.screenAvgMin) : '–'}</b><span>screen a day ${chg(r.screenChange, false)}</span></div>
+      <div><b class="num">${r.tasksDone}</b><span>tasks done</span></div>
+      <div><b class="num">${r.bestDay ? new Date(r.bestDay.day + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' }) : '–'}</b><span>best day${r.bestDay ? `, ${fmtMin(r.bestDay.focusMin)}` : ''}</span></div>
+      <div><b class="num">${r.sleepAvg != null ? r.sleepAvg + 'h' : '–'}</b><span>average sleep</span></div>
+    </div>
+    ${r.topDistraction ? `<p class="muted" style="margin:10px 0 0">Top distraction: <b>${esc(r.topDistraction.label)}</b> (${r.topDistraction.n}×). ${r.abandoned ? `${r.abandoned} blocks ended early.` : ''}</p>` : ''}
+    <p class="review-next"><b>For next week:</b> ${esc(r.focusNext)}</p>`;
+}
+
+// Accountability buddies (Community page): see each other's daily goal progress and send cheers.
+async function renderBuddies() {
+  const el = $('#buddies');
+  if (!el) return;
+  let b;
+  try { b = await api('GET', `/buddies?day=${localDay()}`); } catch { return; }
+  el.innerHTML = `<h2 style="font-size:var(--step-1)">Accountability buddies</h2>
+    <p class="muted" style="font-size:var(--step--1)">Buddies see only your focus time today, your daily goal and your streak. Nothing else.</p>
+    ${b.incoming.map((r) => `<div class="buddy req"><span><b>${esc(r.name)}</b> wants to be buddies</span><button class="btn grow" data-bud-accept="${r.id}">Accept</button><button class="link" data-bud-del="${r.id}">Decline</button></div>`).join('')}
+    ${b.buddies.map((x) => {
+      const pct = Math.min(1, x.today.focusMin / x.today.goalMin);
+      return `<div class="buddy"><span class="face">${esc(initials(x.name))}</span><div class="bud-main"><b>${esc(x.name)}</b>
+        <div class="level-bar goal-bar"><i style="width:${Math.round(pct * 100)}%"></i></div>
+        <small>${fmtMin(x.today.focusMin)} of ${fmtMin(x.today.goalMin)} today · ${x.streak}-day streak</small></div>
+        <div class="bud-act"><button class="btn" data-bud-cheer="${x.id}" data-kind="${x.today.focusMin ? 'cheer' : 'nudge'}">${x.today.focusMin ? 'Cheer' : 'Nudge'}</button>
+        <button class="link" data-bud-del="${x.id}" aria-label="Remove ${esc(x.name)}">Remove</button></div></div>`;
+    }).join('')}
+    ${b.outgoing.map((r) => `<div class="buddy req"><span>Waiting for <b>${esc(r.name)}</b></span><button class="link" data-bud-del="${r.id}">Cancel</button></div>`).join('')}
+    <form id="bud-form" class="task-form"><input name="username" placeholder="Their username" maxlength="24" autocomplete="off" aria-label="Buddy's username" /><button class="btn primary">Add buddy</button></form>
+    ${b.cheers.length ? `<ul class="cheers">${b.cheers.slice(0, 5).map((c) => `<li>${esc(c.from)} ${c.kind === 'nudge' ? 'nudged you to start a block' : c.kind === 'proud' ? 'is proud of you' : 'cheered you on'} <time>${ago(c.created_at)}</time></li>`).join('')}</ul>` : ''}`;
+  el.onsubmit = async (e) => {
+    e.preventDefault();
+    const u = e.target.elements.username.value.trim();
+    if (!u) return;
+    try { const r = await api('POST', '/buddies', { username: u }); toast(r.status === 'accepted' ? 'You are now buddies' : 'Request sent'); renderBuddies(); } catch (err) { fail(err); }
+  };
+  el.onclick = async (e) => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    try {
+      if (t.dataset.budAccept) { await api('POST', `/buddies/${t.dataset.budAccept}/accept`); toast('You are now buddies'); }
+      else if (t.dataset.budCheer) { await api('POST', `/buddies/${t.dataset.budCheer}/cheer`, { kind: t.dataset.kind }); toast(t.dataset.kind === 'nudge' ? 'Nudge sent' : 'Cheer sent', 'win'); }
+      else if (t.dataset.budDel) { if (!confirm('Remove this buddy or request?')) return; await api('DELETE', `/buddies/${t.dataset.budDel}`); }
+      else return;
+      renderBuddies();
+    } catch (err) { fail(err); }
+  };
+}
+
+// Early warning: load score for each of the last 14 days, with the state bands.
+async function renderTrend() {
+  const el = $('#trend-panel');
+  if (!el) return;
+  let t;
+  try { t = await api('GET', `/insights/trend?day=${localDay()}`); } catch { el.hidden = true; return; }
+  const pts = t.points;
+  const head = `<h2 style="font-size:var(--step-1)">Early warning</h2>`;
+  if (pts.length < 3) { el.innerHTML = `${head}<p class="empty">A trend appears after a few days of data. It watches for your load score climbing before it turns into burnout.</p>`; return; }
+  const W = 600, H = 170, L = 30, R = 12, T = 12, B = 26;
+  const days = Array.from({ length: 14 }, (_, i) => shiftDay(localDay(), i - 13));
+  const x = (day) => L + (days.indexOf(day) / 13) * (W - L - R);
+  const y = (v) => T + (1 - v / 100) * (H - T - B);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.day).toFixed(1)},${y(p.score).toFixed(1)}`).join('');
+  const cls = (sc) => (sc < 40 ? 'ok' : sc < 65 ? 'mid' : 'hi');
+  const last = pts[pts.length - 1];
+  el.innerHTML = `${head}
+    ${t.warning ? `<p class="warn-banner ${t.warning.level}" style="margin:8px 0 12px">${esc(t.warning.text)}</p>` : `<p class="muted" style="margin:4px 0 10px">No warning signs: your load score isn't climbing. Synapse flags it if it rises 3 days running or jumps on last week.</p>`}
+    <svg class="trend" viewBox="0 0 ${W} ${H}" role="img" aria-label="Load score for the last 14 days, latest ${last.score} out of 100">
+      <rect x="${L}" y="${y(100)}" width="${W - L - R}" height="${y(65) - y(100)}" class="band hi"/>
+      <rect x="${L}" y="${y(65)}" width="${W - L - R}" height="${y(40) - y(65)}" class="band mid"/>
+      <rect x="${L}" y="${y(40)}" width="${W - L - R}" height="${y(0) - y(40)}" class="band ok"/>
+      ${[0, 40, 65, 100].map((v) => `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('')}
+      <text x="${L}" y="${H - 6}">${shortDate(days[0])}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">Today</text>
+      <path d="${path}" class="line"/>
+      ${pts.map((p) => `<circle cx="${x(p.day).toFixed(1)}" cy="${y(p.score).toFixed(1)}" r="${p === last ? 5 : 3.5}" class="pt ${cls(p.score)}"><title>${shortDate(p.day)}: ${p.score}/100 (${p.state})</title></circle>`).join('')}
+    </svg>
+    <div class="trend-key"><span><i class="ok"></i>Balanced (under 40)</span><span><i class="mid"></i>Strained</span><span><i class="hi"></i>At risk (65+)</span></div>`;
+}
+
+const PATTERN_ICON = { sleep: '☾', stress: '〜', leisure: '▢', distractions: '◔', hour: '☀', length: '◷', weekday: '▦' };
+async function renderPatterns() {
+  const el = $('#patterns-panel');
+  if (!el) return;
+  let p;
+  try { p = await api('GET', `/patterns?day=${localDay()}`); } catch { el.hidden = true; return; }
+  el.innerHTML = `<h2 style="font-size:var(--step-1)">Your personal patterns</h2>
+    <p class="muted" style="font-size:var(--step--1)">Found by comparing your own days over the last 60 days (${p.daysAnalysed} with data). ${esc(p.note)}</p>
+    ${p.findings.length ? `<ul class="findings">${p.findings.map((f) => `<li><span class="f-icon" aria-hidden="true">${PATTERN_ICON[f.kind] || '•'}</span><div><p>${esc(f.text)}</p><small>Based on ${esc(f.basedOn)}</small></div></li>`).join('')}</ul>`
+      : '<p class="empty">No clear patterns yet. After a couple of weeks of focus blocks and check-ins, Synapse can tell you things like which hours and block lengths work best for you.</p>'}`;
+}
+
+async function renderDistractions() {
+  const el = $('#distract-panel');
+  if (!el) return;
+  let d;
+  try { d = await api('GET', `/distractions?day=${localDay()}&days=30`); } catch { el.hidden = true; return; }
+  const max = Math.max(1, ...d.top.map((t) => t.n));
+  el.innerHTML = `<h2 style="font-size:var(--step-1)">What pulls you away</h2>
+    ${d.total ? `<p class="muted" style="font-size:var(--step--1)">${d.total} distractions logged in 30 days${d.peakLabel ? `, most around ${d.peakLabel}` : ''}.</p>
+      <div class="dist-bars">${d.top.map((t) => `<div><span>${esc(t.label)}</span><span class="lb-bar"><i style="width:${Math.round((t.n / max) * 100)}%"></i></span><b class="num">${t.n}</b></div>`).join('')}</div>`
+      : `<p class="empty" style="margin:0">During a focus block on Today, tap <b>Got distracted?</b> to note what pulled you away. Patterns show up here.</p>`}`;
+}
 
 // ---------------------------------------------------------------- Garden
 VIEWS.garden = async (main) => {

@@ -519,6 +519,60 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert(mine.data.optedIn && mine.data.rows.find((r) => r.isMe));
   });
 
+  console.log('Burnout-prevention extras');
+  await test('distraction log', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    for (const kind of ['phone', 'phone', 'messages'])
+      assert((await api('POST', '/api/distractions', { kind, at: `${today}T15:10` }, A)).status === 201);
+    assert((await api('POST', '/api/distractions', { kind: 'aliens', at: `${today}T15:10` }, A)).status === 400);
+    const r = await api('GET', `/api/distractions?day=${today}`, null, A);
+    assert(r.data.total === 3 && r.data.today === 3 && r.data.top[0].kind === 'phone' && r.data.top[0].n === 2 && r.data.peakHour === 15, JSON.stringify(r.data));
+    assert((await api('GET', `/api/distractions?day=${today}`, null, B)).data.total === 0, 'private to each user');
+  });
+  await test('patterns, trend, smart block and weekly review from 3 weeks of data', async () => {
+    const reg = await api('POST', '/api/auth/register', { username: 'pattern', password: 'pattern-pass-1' });
+    const P = reg.data.token;
+    await api('PUT', '/api/consents', { activity_tracking: true, usage_tracking: true, ai_insights: true }, P);
+    const today = new Date().toISOString().slice(0, 10);
+    await api('POST', '/api/sample-data', { today }, P);
+    const pat = await api('GET', `/api/patterns?day=${today}`, null, P);
+    assert(pat.status === 200 && pat.data.daysAnalysed >= 10 && pat.data.findings.length >= 1, JSON.stringify(pat.data));
+    assert(pat.data.findings.every((f) => f.text && f.basedOn), 'every finding says what it is based on');
+    const tr = await api('GET', `/api/insights/trend?day=${today}`, null, P);
+    assert(tr.status === 200 && tr.data.points.length >= 7 && tr.data.points.every((p) => p.score >= 0 && p.score <= 100), JSON.stringify(tr.data));
+    assert(tr.data.warning && /load score/i.test(tr.data.warning.text), 'sample data drifts upward, so a warning shows: ' + JSON.stringify(tr.data));
+    const sb = await api('GET', `/api/suggest-block?day=${today}&hour=10`, null, P);
+    assert([15, 25, 50].includes(sb.data.minutes) && sb.data.reason.length > 10, JSON.stringify(sb.data));
+    const late = await api('GET', `/api/suggest-block?day=${today}&hour=23`, null, P);
+    assert(late.data.minutes === 15 && /late/.test(late.data.reason), JSON.stringify(late.data));
+    const rv = await api('GET', `/api/review?day=${today}`, null, P);
+    assert(rv.data.focusMin > 0 && rv.data.activeDays > 0 && rv.data.bestDay && rv.data.focusNext, JSON.stringify(rv.data));
+    const fresh = await api('GET', `/api/patterns?day=${today}`, null, B);
+    assert(fresh.data.findings.length === 0, 'no claims without enough data');
+  });
+  await test('accountability buddies', async () => {
+    let r = await api('POST', '/api/buddies', { username: '@Bob' }, A);
+    assert(r.status === 201 && r.data.status === 'pending', JSON.stringify(r.data));
+    assert((await api('POST', '/api/buddies', { username: 'bob' }, A)).status === 409);
+    assert((await api('POST', '/api/buddies', { username: 'alice' }, A)).status === 400);
+    assert((await api('POST', '/api/buddies', { username: 'nobody-here' }, A)).status === 404);
+    let lb = await api('GET', '/api/buddies', null, B);
+    assert(lb.data.incoming.length === 1 && lb.data.buddies.length === 0);
+    const reqId = lb.data.incoming[0].id;
+    assert((await api('POST', `/api/buddies/${reqId}/accept`, null, A)).status === 404, 'only the addressee accepts');
+    assert((await api('POST', `/api/buddies/${reqId}/accept`, null, B)).status === 200);
+    const today = new Date().toISOString().slice(0, 10);
+    lb = await api('GET', `/api/buddies?day=${today}`, null, B);
+    const alice = lb.data.buddies[0];
+    assert(alice.name === 'Alice' && alice.today.focusMin > 0 && alice.today.goalMin === 15 && !('email' in alice), JSON.stringify(alice));
+    assert((await api('POST', `/api/buddies/${reqId}/cheer`, { kind: 'cheer' }, B)).status === 201);
+    assert((await api('POST', `/api/buddies/${reqId}/cheer`, { kind: 'nudge' }, B)).status === 429, 'cheers are rate limited');
+    const la = await api('GET', '/api/buddies', null, A);
+    assert(la.data.cheers.length === 1 && la.data.cheers[0].from === 'Bob');
+    assert((await api('DELETE', `/api/buddies/${reqId}`, null, A)).status === 200);
+    assert((await api('GET', '/api/buddies', null, B)).data.buddies.length === 0);
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);

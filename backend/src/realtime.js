@@ -60,6 +60,7 @@ function attach(io) {
   }
 
   io.on('connection', (socket) => {
+    socket.join(`user:${socket.user.id}`); // personal channel (buddy requests and cheers)
     members.set(socket.id, { userId: socket.user.id, name: socket.user.name, roomId: null, focusing: false, focusEndsAt: null, audio: false, muted: false, video: false });
 
     socket.on('room:join', async ({ roomId } = {}, ack) => {

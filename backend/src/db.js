@@ -197,6 +197,36 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   leaderboard    INTEGER NOT NULL DEFAULT 0     -- opt in to the weekly focus leaderboard
 );
 
+-- Distraction log: tapped during a focus block ("what pulled you away?").
+CREATE TABLE IF NOT EXISTS distractions (
+  id         ${T.ID},
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day        TEXT NOT NULL,
+  at         TEXT NOT NULL,          -- local timestamp
+  kind       TEXT NOT NULL,
+  note       TEXT,
+  created_at TEXT NOT NULL DEFAULT ${T.NOW}
+);
+CREATE INDEX IF NOT EXISTS idx_distractions_user ON distractions(user_id, day);
+
+-- Accountability buddies: a request that the other person accepts.
+CREATE TABLE IF NOT EXISTS buddies (
+  id           ${T.ID},
+  requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted')),
+  created_at   TEXT NOT NULL DEFAULT ${T.NOW},
+  UNIQUE (requester_id, addressee_id)
+);
+CREATE TABLE IF NOT EXISTS cheers (
+  id         ${T.ID},
+  from_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT ${T.NOW}
+);
+CREATE INDEX IF NOT EXISTS idx_cheers_to ON cheers(to_id, id);
+
 -- Replies to community check-ins.
 CREATE TABLE IF NOT EXISTS post_replies (
   id         ${T.ID},
