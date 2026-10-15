@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Lets the app ask to be excluded from battery optimisation (Oppo/ColorOS and others pause background apps). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Granted by the user in Settings > Usage access; lets the app read how long apps are open. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"

@@ -729,17 +729,60 @@ async function renderLeaderboard() {
   const from = shiftDay(localDay(now), -((now.getDay() + 6) % 7));
   let lb;
   try { lb = await api('GET', `/leaderboard?from=${from}`); } catch { return; }
+  if (sampleOn()) {
+    lb.rows = [...lb.rows, ...SAMPLE.leaderboard.map((x) => ({ ...x, sample: true }))].sort((a, b) => b.minutes - a.minutes).map((x, i) => ({ ...x, rank: i + 1 }));
+  }
   const myRow = lb.rows.find((r) => r.isMe);
   el.innerHTML = `<div class="lb-head"><div><h2 style="font-size:var(--step-1);margin:0">This week's focus</h2>
       <p class="muted" style="margin:4px 0 0;font-size:var(--step--1)">Completed focus blocks since Monday. Only people who opt in are listed, by display name.</p></div>
       <label class="switch lb-switch"><strong>Show me</strong><input type="checkbox" id="lb-opt" ${lb.optedIn ? 'checked' : ''} /></label></div>
     ${lb.rows.length ? `<ol class="lb">${lb.rows.map((r) => `<li class="${r.isMe ? 'me' : ''}"><span class="rank num">${r.rank}</span><span class="face">${esc(initials(r.name))}</span>
-        <span class="lb-name">${esc(r.name)}${r.isMe ? ' (you)' : ''} ${levelChip(r.level)}</span><span class="lb-bar"><i style="width:${Math.max(4, Math.round((r.minutes / lb.rows[0].minutes) * 100))}%"></i></span><b class="num">${fmtMin(r.minutes)}</b></li>`).join('')}</ol>`
+        <span class="lb-name">${esc(r.name)}${r.isMe ? ' (you)' : ''} ${levelChip(r.level)}${r.sample ? sampleTag : ''}</span><span class="lb-bar"><i style="width:${Math.max(4, Math.round((r.minutes / lb.rows[0].minutes) * 100))}%"></i></span><b class="num">${fmtMin(r.minutes)}</b></li>`).join('')}</ol>`
       : '<p class="empty">Nobody on the board yet this week. Opt in and finish a focus block to be first.</p>'}
     ${myRow ? '' : `<p class="muted" style="font-size:var(--step--1);margin-bottom:0">Your week: <b>${fmtMin(lb.me.minutes)}</b> in ${lb.me.blocks} ${lb.me.blocks === 1 ? 'block' : 'blocks'}${lb.optedIn ? '' : ' (only you can see this)'}.</p>`}`;
   $('#lb-opt').onchange = async (e) => {
     try { state.me.prefs = await api('PUT', '/prefs', { leaderboard: e.target.checked }); renderLeaderboard(); } catch (err) { fail(err); }
   };
+}
+
+// ---------------------------------------------------------------- Sample people (demo only)
+// With "Try with sample data" on, a few made-up people fill rooms, the feed and the leaderboard so you can see
+// how Synapse feels with others around. They're only on your screen, always marked "sample", and go away
+// with "Remove sample data".
+const SAMPLE_PAGE_LOAD = Date.now();
+const SAMPLE = {
+  people: [
+    { name: 'Riya', level: { level: 4, title: 'Young tree', badges: 7 }, focusLeft: 18, here: 42, rooms: ['study-hall', 'deep-work'] },
+    { name: 'Kabir', level: { level: 2, title: 'Sprout', badges: 3 }, focusLeft: 0, here: 12, rooms: ['study-hall', 'gentle-start'] },
+    { name: 'Ananya', level: { level: 6, title: 'Branching', badges: 11 }, focusLeft: 31, here: 75, rooms: ['study-hall', 'deep-work', 'night-owls'] },
+    { name: 'Arjun', level: { level: 3, title: 'Sapling', badges: 5 }, focusLeft: 7, here: 26, rooms: ['deep-work', 'gentle-start'] },
+  ],
+  chat: [
+    { author: 'Ananya', body: 'Lo-fi on, phone in the other room. 50 minutes on my thesis, let\'s go 💪', ago: 40 },
+    { author: 'Riya', body: 'Starting a 50-minute block on DBMS notes 📚', ago: 36 },
+    { author: 'Kabir', body: 'Same here, revising chapter 4. See you all at the break!', ago: 30, reply: { author: 'Riya', body: 'Starting a 50-minute block on DBMS notes 📚' } },
+    { author: 'Arjun', body: 'First block of the day done. Taking a 10-minute walk 🌿', ago: 9 },
+  ],
+  posts: [
+    { author: 'Ananya', mood: 'proud', body: 'Three 50-minute blocks before lunch and I actually took every break. Feeling human today.', ago: 55,
+      replies: [{ author: 'Riya', body: 'That\'s huge! The breaks are the hard part for me.' }] },
+    { author: 'Kabir', mood: 'tired', body: 'Scrolled until 1 am again. Trying the bedtime nudge tonight.', ago: 140,
+      replies: [{ author: 'Arjun', body: 'Phone charger outside the bedroom helped me a lot.' }, { author: 'Ananya', body: 'You got this. One night at a time.' }] },
+    { author: 'Riya', mood: 'hopeful', body: 'Week 2 of logging distractions: turns out it\'s WhatsApp, not Instagram 😅', ago: 300, replies: [] },
+  ],
+  leaderboard: [{ name: 'Ananya', minutes: 610, level: { level: 6, title: 'Branching', badges: 11 } }, { name: 'Riya', minutes: 470, level: { level: 4, title: 'Young tree', badges: 7 } },
+    { name: 'Arjun', minutes: 300, level: { level: 3, title: 'Sapling', badges: 5 } }, { name: 'Kabir', minutes: 220, level: { level: 2, title: 'Sprout', badges: 3 } }],
+};
+const sampleOn = () => !!state.me?.hasSampleData;
+const sampleTag = '<span class="pill sample-pill">sample</span>';
+const sampleAgo = (min) => new Date(Date.now() - min * 60000).toISOString().replace('T', ' ').slice(0, 19);
+function sampleMembers(roomId) {
+  if (!sampleOn()) return [];
+  return SAMPLE.people.filter((p) => p.rooms.includes(roomId)).map((p, i) => ({
+    socketId: `sample-${i}`, sample: true, name: p.name, level: p.level, userId: null,
+    focusing: p.focusLeft > 0, focusEndsAt: p.focusLeft ? SAMPLE_PAGE_LOAD + p.focusLeft * 60000 : null,
+    joinedAt: SAMPLE_PAGE_LOAD - p.here * 60000, audio: true, muted: true, video: false,
+  }));
 }
 
 // Distraction log: tap what pulled you away without stopping the block.
@@ -850,8 +893,8 @@ VIEWS.rooms = async (main, roomId) => {
     <div class="room-list">${list.map((r) => `
       <button class="room-tile" data-room="${esc(r.id)}">
         <h3>${esc(r.name)}</h3><p>${esc(r.description)}</p>
-        <div class="faces">${r.members.slice(0, 4).map((m) => `<span class="face" title="${esc(m.name)}">${esc(initials(m.name))}</span>`).join('')}
-          <span>${r.members.length ? `${r.members.length} here${r.members.some((m) => m.focusing) ? `, ${r.members.filter((m) => m.focusing).length} focusing` : ''}` : 'Nobody here yet'}</span></div>
+        ${(() => { const all = [...r.members, ...sampleMembers(r.id)]; return `<div class="faces">${all.slice(0, 4).map((m) => `<span class="face ${m.sample ? 'sample' : ''}" title="${esc(m.name)}${m.sample ? ' (sample)' : ''}">${esc(initials(m.name))}</span>`).join('')}
+          <span>${all.length ? `${all.length} here${all.some((m) => m.focusing) ? `, ${all.filter((m) => m.focusing).length} focusing` : ''}${sampleMembers(r.id).length ? ' (incl. samples)' : ''}` : 'Nobody here yet'}</span></div>`; })()}
       </button>`).join('')}</div>
     <section class="panel leaderboard" id="leaderboard"></section>`;
   main.addEventListener('click', (e) => { const t = e.target.closest('[data-room]'); if (t) location.hash = `#/rooms/${t.dataset.room}`; });
@@ -918,15 +961,21 @@ async function renderRoom(main, roomId) {
     if (target) { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); target.classList.add('flash'); setTimeout(() => target.classList.remove('flash'), 1200); }
   });
   $('#reply-cancel').addEventListener('click', () => setReply(null));
+  if (sampleOn() && sampleMembers(roomId).length) {
+    for (const m of SAMPLE.chat.filter((c) => sampleMembers(roomId).some((p) => p.name === c.author)))
+      log.insertAdjacentHTML('beforeend', `<div class="msg sample"><div class="who">${esc(m.author)} ${sampleTag} · ${ago(sampleAgo(m.ago))}</div>
+        ${m.reply ? `<div class="quote"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</div>` : ''}<div class="bubble">${esc(m.body)}</div></div>`);
+  }
   (await api('GET', `/rooms/${roomId}/messages`)).forEach(addMsg);
   if (!log.children.length) log.innerHTML = `<p class="empty" id="chat-empty">No messages yet. Say what you're working on so others know you're here.</p>`;
 
   let lastMembers = [];
-  const paintPeople = (members) => {
-    lastMembers = members;
+  const paintPeople = (realMembers) => {
+    lastMembers = realMembers;
+    const members = [...realMembers, ...sampleMembers(roomId)];
     $('#people').innerHTML = members.map((m) => {
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
-      return `<li><span class="face">${esc(initials(m.name))}</span><span><b>${esc(m.name)}${m.socketId === state.socket?.id ? ' (you)' : ''}</b>${levelChip(m.level)}<br>
+      return `<li class="${m.sample ? 'sample' : ''}"><span class="face">${esc(initials(m.name))}</span><span><b>${esc(m.name)}${m.socketId === state.socket?.id ? ' (you)' : ''}</b>${levelChip(m.level)}${m.sample ? sampleTag : ''}<br>
         <span class="status ${m.focusing ? 'focusing' : ''}">${m.focusing ? `Focusing${mins != null ? `, ${mins} min left` : ''}` : 'Here'}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}${m.audio ? (m.video ? ' · on camera' : ' · in call') + (m.muted ? '' : ' · mic on') : ''}</span></span></li>`;
     }).join('');
     stage.paint(members);
@@ -1097,7 +1146,7 @@ const stage = {
       tile.querySelector('.tile-face').textContent = initials(m.name);
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
       tile.querySelector('.tile-name').innerHTML = `${m.muted ? '<svg class="mic-off" aria-label="mic off"><use href="#i-mic-off"/></svg>' : '<svg aria-label="mic on"><use href="#i-mic"/></svg>'}
-        <span>${esc(mine ? 'You' : m.name)}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}</span>${m.focusing ? `<em>${mins != null ? `${mins}m left` : 'focusing'}</em>` : ''}`;
+        <span>${esc(mine ? 'You' : m.name)}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}</span>${m.sample ? '<em class="sample-em">sample</em>' : ''}${m.focusing ? `<em>${mins != null ? `${mins}m left` : 'focusing'}</em>` : ''}`;
     }
     el.querySelectorAll('.tile').forEach((t) => { if (!keep.has(t.dataset.key)) { const v = t.querySelector('video'); v.srcObject = null; t.remove(); } });
     const empty = document.getElementById('stage-empty');
@@ -1526,6 +1575,11 @@ VIEWS.community = async (main) => {
     const r = await api('GET', `/posts?limit=15${!reset && oldest ? `&before=${oldest}` : ''}`);
     if (reset) feed.innerHTML = '';
     feed.insertAdjacentHTML('beforeend', r.posts.map(postHtml).join(''));
+    if (reset && sampleOn()) feed.insertAdjacentHTML('beforeend', SAMPLE.posts.map((p) => `
+      <li class="post sample"><header><b>${esc(p.author)}</b>${sampleTag}<span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood])}</span><time>${ago(sampleAgo(p.ago))}</time></header>
+        <p>${esc(p.body)}</p>
+        ${p.replies.length ? `<div class="replies">${p.replies.map((x) => `<div class="reply"><b>${esc(x.author)}</b> ${sampleTag}<p>${esc(x.body)}</p></div>`).join('')}</div>` : ''}
+        <p class="muted" style="font-size:12px;margin:6px 0 0">Sample post, only visible to you while sample data is on.</p></li>`).join(''));
     if (r.posts.length) oldest = r.posts[r.posts.length - 1].id;
     $('#more').hidden = r.posts.length < 15;
     if (!feed.children.length) feed.innerHTML = `<li class="empty">No check-ins yet. Share how today's focus went and you'll be the first.</li>`;

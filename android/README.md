@@ -74,3 +74,13 @@ The app has no third-party libraries. JUnit is used only for tests.
 - **Focus:** suggested block length, "Focus on a task" (the finished block counts towards it), and **Got distracted?** during a block.
 - **Focus guard (optional, Settings):** during a focus block, opening a social, video or game app, or one with a daily limit, shows "Paused during focus" with the time left. You can go back, use the app for 2 minutes, or end the block. Needs Usage access and **Display over other apps**; it runs as a foreground service only while a focus block runs.
 - **Language:** English or हिन्दी (Settings).
+
+### Oppo, Realme, OnePlus (ColorOS) and other strict battery savers
+
+These phones stop background apps aggressively, which can delay the end-of-block alarm, the focus guard and syncing. In the app, open **Settings > Keep Synapse running**:
+1. **Remove battery restriction** → Allow.
+2. **Open auto-start** → switch Synapse on (Auto launch / Allow background activity).
+3. In Recent apps, pull the Synapse card down to **lock** it so "clear all" doesn't close it.
+4. Settings > Battery > More settings > **Optimise battery use** → Synapse → Don't optimise.
+
+For the focus guard, also allow **Display over other apps** (ColorOS: Settings > Apps > Special app access > Display over other apps, or the button in Synapse).
