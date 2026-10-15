@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Synapse AI</title>
+  <meta name="description" content="Focus timer, focus rooms, screen-time reflection and explainable wellbeing insights to help prevent digital burnout." />
+  <meta name="theme-color" content="#EEF2F3" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#10181E" media="(prefers-color-scheme: dark)" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <!-- Signed-out -->
+  <div id="auth" class="auth" hidden>
+    <section class="auth-intro">
+      <div class="brand big"><span class="brand-mark" aria-hidden="true"></span>Synapse AI</div>
+      <h1>Focus in blocks.<br />Rest on purpose.<br />Notice the drift.</h1>
+      <p>Synapse pairs a Pomodoro timer with real breaks, quiet co-working rooms and a weekly look at your screen habits, so tiredness shows up as a pattern before it becomes burnout.</p>
+      <svg class="auth-tree" viewBox="0 0 200 200" aria-hidden="true"><use href="#tree-oak" /></svg>
+    </section>
+    <section class="auth-panel">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-auth-tab="login">Sign in</button>
+        <button role="tab" aria-selected="false" data-auth-tab="register">Create account</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <label class="field" data-only="register">Your name
+          <input name="displayName" autocomplete="nickname" maxlength="40" />
+        </label>
+        <label class="field">Username
+          <input name="username" autocomplete="username" required minlength="3" maxlength="24" />
+        </label>
+        <label class="field">Password
+          <input name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128" />
+          <small data-only="register">At least 8 characters.</small>
+        </label>
+        <p class="form-error" role="alert"></p>
+        <button class="btn primary wide" type="submit">Sign in</button>
+      </form>
+    </section>
+  </div>
+
+  <!-- Onboarding consent (shown after first signup) -->
+  <dialog id="onboarding" class="sheet">
+    <form method="dialog" id="onboarding-form">
+      <h2>Choose what Synapse may save</h2>
+      <p>You can change these any time in Privacy. Nothing outside this site is tracked.</p>
+      <div class="consent-list" data-consent-host></div>
+      <div class="sheet-actions"><button class="btn primary" value="save">Save and continue</button></div>
+    </form>
+  </dialog>
+
+  <!-- Signed-in -->
+  <div id="app" class="shell" hidden>
+    <nav class="rail" aria-label="Main">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Synapse</span></div>
+      <a href="#/today" data-nav="today"><svg><use href="#i-timer" /></svg><span>Today</span></a>
+      <a href="#/rooms" data-nav="rooms"><svg><use href="#i-rooms" /></svg><span>Rooms</span></a>
+      <a href="#/community" data-nav="community"><svg><use href="#i-community" /></svg><span>Community</span></a>
+      <a href="#/screen-time" data-nav="screen-time"><svg><use href="#i-screen" /></svg><span>Screen<span class="lg"> time</span></span></a>
+      <a href="#/insights" data-nav="insights"><svg><use href="#i-insight" /></svg><span>Insights</span></a>
+      <a href="#/garden" data-nav="garden"><svg><use href="#i-tree" /></svg><span>Garden</span></a>
+      <a href="#/privacy" data-nav="privacy" class="rail-low"><svg><use href="#i-lock" /></svg><span>Privacy</span></a>
+      <div class="rail-user">
+        <span id="who"></span>
+        <button class="link" id="logout">Sign out</button>
+      </div>
+    </nav>
+    <main id="main" tabindex="-1"></main>
+    <div id="mini-timer" class="mini-timer" hidden></div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="audio-sinks" hidden></div>
+
+  <!-- Icon + tree sprites -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 9v4l2.5 2M9.5 2.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-rooms" viewBox="0 0 24 24"><circle cx="8" cy="9" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="16.5" cy="9.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.5 19c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5M14 15c2.6-.6 5.6.4 7 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-community" viewBox="0 0 24 24"><path d="M4 5h16v10H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="i-screen" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 20h8M12 16v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-insight" viewBox="0 0 24 24"><path d="M4 19V11M10 19V5M16 19v-6M22 19H2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-tree" viewBox="0 0 24 24"><path d="M12 21v-6M12 3c-4 0-6.5 3-6.5 6.2C5.5 12.4 8.4 15 12 15s6.5-2.6 6.5-5.8C18.5 6 16 3 12 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+
+      <symbol id="tree-sapling" viewBox="0 0 200 200"><path d="M100 170v-50" stroke="var(--bark)" stroke-width="7" stroke-linecap="round"/><path d="M100 128c-26 2-40-14-40-34 22-2 38 12 40 34zM100 118c22 0 36-14 36-32-20 0-34 12-36 32z" fill="var(--leaf)"/></symbol>
+      <symbol id="tree-maple" viewBox="0 0 200 200"><path d="M100 172v-62M100 136l-18-14M100 128l16-12" stroke="var(--bark)" stroke-width="8" stroke-linecap="round"/><circle cx="100" cy="80" r="44" fill="var(--leaf)"/><circle cx="70" cy="104" r="26" fill="var(--leaf-2)"/><circle cx="132" cy="100" r="28" fill="var(--leaf-2)"/></symbol>
+      <symbol id="tree-cedar" viewBox="0 0 200 200"><path d="M100 174v-30" stroke="var(--bark)" stroke-width="9" stroke-linecap="round"/><path d="M100 22l40 60h-18l30 38h-22l28 30H42l28-30H48l30-38H60z" fill="var(--leaf)"/><path d="M100 22l40 60h-18l30 38h-22l28 30h-58z" fill="var(--leaf-2)" opacity=".55"/></symbol>
+      <symbol id="tree-oak" viewBox="0 0 200 200"><path d="M100 176v-70M100 130l-24-22M100 120l26-24" stroke="var(--bark)" stroke-width="10" stroke-linecap="round"/><circle cx="100" cy="70" r="40" fill="var(--leaf)"/><circle cx="62" cy="92" r="32" fill="var(--leaf)"/><circle cx="140" cy="90" r="34" fill="var(--leaf-2)"/><circle cx="104" cy="104" r="30" fill="var(--leaf-2)"/></symbol>
+    </defs>
+  </svg>
+
+  <script src="/socket.io/socket.io.min.js"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Synapse screen time</title><link rel="stylesheet" href="ui.css" />
+<style> body { width: 340px; padding: 16px; } header { display:flex; justify-content:space-between; align-items:start; margin-bottom: 12px; } </style></head>
+<body>
+  <header>
+    <div><h1>Today in your browser</h1><div class="big num" id="total">0m</div><div class="muted" id="now"></div></div>
+    <button id="pause" aria-pressed="false">Pause</button>
+  </header>
+  <ul class="sites" id="sites"></ul>
+  <p class="muted" id="empty" hidden>Nothing measured yet today. Time counts while a tab is in front and you're active.</p>
+  <div class="status" id="status" style="margin:12px 0"></div>
+  <div class="row"><button class="primary" id="sync">Sync now</button><button id="open">Open Synapse</button><button id="settings">Settings</button></div>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

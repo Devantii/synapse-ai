@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Synapse screen time settings</title><link rel="stylesheet" href="ui.css" />
+<style> main { max-width: 620px; margin: 0 auto; padding: 32px 20px 60px; } section { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-top: 18px; } .cats { display: grid; gap: 6px; } .cats div { display: grid; grid-template-columns: 1fr 190px; gap: 10px; align-items: center; font-size: 13px; } code { font-family: Consolas, ui-monospace, monospace; } </style></head>
+<body><main>
+  <h1 style="font-size:24px">Synapse screen time</h1>
+  <p class="muted">Measures how long the website in front of you is open while you're active, then adds the daily totals to your Synapse account.</p>
+
+  <section>
+    <h2>Connect to Synapse</h2>
+    <p class="muted">In Synapse, open <b>Privacy</b>, choose <b>Connect browser extension</b>, and paste the address and key here.</p>
+    <form id="connect">
+      <label>Server address <input id="server" type="url" placeholder="http://localhost:3000" required /></label>
+      <label>Device key <input id="key" autocomplete="off" spellcheck="false" placeholder="syn_..." /><small id="key-hint"></small></label>
+      <div class="row"><button class="primary" type="submit">Test and save</button><button type="button" class="danger" id="disconnect" hidden>Disconnect</button></div>
+    </form>
+    <div class="status" id="conn-status" style="margin-top:12px" hidden></div>
+  </section>
+
+  <section>
+    <h2>Sites to ignore</h2>
+    <p class="muted">One per line. Subdomains are included, so <code>example.com</code> also ignores <code>app.example.com</code>. Your Synapse dashboard is always ignored because it measures itself.</p>
+    <label><textarea id="excluded" rows="4" placeholder="bank.example.com"></textarea></label>
+    <button id="save-excluded">Save list</button>
+  </section>
+
+  <section>
+    <h2>Categories for your top sites</h2>
+    <p class="muted">Categories decide which bar a site joins on your Synapse chart and feed the insights.</p>
+    <div class="cats" id="cats"></div>
+    <p class="muted" id="cats-empty">Browse for a bit and your most-used sites will appear here.</p>
+  </section>
+
+  <section>
+    <h2>Your data</h2>
+    <p>Stored on this computer: website hostnames (like <code>youtube.com</code>) and seconds per day, for 30 days. Never full addresses, page titles or what you type. Incognito windows are never measured.</p>
+    <p>Sent to Synapse: per-site minutes for the last 7 days, every 5 minutes. To delete data already sent, use Privacy &gt; Delete screen-time data in Synapse.</p>
+    <button class="danger" id="clear">Clear data on this computer</button>
+  </section>
+</main><script src="options.js" type="module"></script></body>
+</html>

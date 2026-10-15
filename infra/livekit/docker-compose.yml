@@ -1,0 +1,16 @@
+# Local LiveKit media server for Synapse voice rooms (development).
+#   docker compose up -d
+# Then in backend/.env:
+#   LIVEKIT_URL=ws://localhost:7880
+#   LIVEKIT_API_KEY=devkey
+#   LIVEKIT_API_SECRET=secret
+# --dev uses the well-known devkey/secret pair. Never use it on a public server.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.9
+    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+    ports:
+      - "7880:7880"          # signaling (WebSocket)
+      - "7881:7881"          # WebRTC over TCP
+      - "7882:7882/udp"      # WebRTC over UDP
+    restart: unless-stopped

@@ -1,0 +1,29 @@
+:root { --mist:#EEF2F3; --surface:#fff; --surface-2:#E3E9EB; --ink:#1C2A33; --ink-2:#4A5B66; --ink-3:#74838C; --line:#CDD6DA; --lichen:#3F7355; --berry:#A33A4C; --amber:#B0761A; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --mist:#10181E; --surface:#18232B; --surface-2:#1F2C35; --ink:#E4ECEF; --ink-2:#A9B8C0; --ink-3:#7E8E97; --line:#2C3B45; --lichen:#7DBE93; --berry:#E07D8E; --amber:#E0A84A; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--mist); color: var(--ink); font: 14px/1.5 'Segoe UI', system-ui, sans-serif; }
+h1, h2 { margin: 0 0 6px; line-height: 1.2; }
+h1 { font-size: 18px; } h2 { font-size: 15px; }
+p { margin: 0 0 10px; }
+.muted { color: var(--ink-3); }
+button { font: 600 13px/1 inherit; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 9px 12px; cursor: pointer; min-height: 36px; }
+button:hover { border-color: var(--ink-3); }
+button.primary { background: var(--ink); color: var(--mist); border-color: var(--ink); }
+button.danger { color: var(--berry); border-color: currentColor; background: transparent; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+:focus-visible { outline: 3px solid #2F6BD8; outline-offset: 2px; }
+input, textarea, select { font: inherit; color: var(--ink); background: var(--surface); border: 1.5px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+label { display: grid; gap: 4px; font-weight: 600; font-size: 13px; margin-bottom: 12px; }
+label small { font-weight: 400; color: var(--ink-3); }
+.status { padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; color: var(--ink-2); }
+.status.ok { border-left: 3px solid var(--lichen); }
+.status.err { border-left: 3px solid var(--berry); color: var(--ink); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sites { list-style: none; padding: 0; margin: 0; }
+.sites li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.sites li:last-child { border-bottom: 0; }
+.sites .bar { grid-column: 1 / -1; height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.sites .bar i { display: block; height: 100%; background: var(--lichen); }
+.sites .host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }
+.big { font-size: 28px; font-weight: 800; letter-spacing: -.02em; }

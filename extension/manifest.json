@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Synapse Screen Time",
+  "short_name": "Synapse",
+  "version": "1.0.0",
+  "description": "Measures how long you actively spend on each website and syncs daily totals to your Synapse AI account.",
+  "minimum_chrome_version": "116",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["tabs", "idle", "alarms", "storage"],
+  "action": {
+    "default_title": "Synapse screen time",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png" }
+  },
+  "options_page": "options.html",
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "incognito": "not_allowed"
+}
