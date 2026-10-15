@@ -24,6 +24,14 @@ While a focus block is running in Synapse (on any device), the extension pauses 
 - **How it knows:** the extension checks Synapse every 30 seconds, so a block can take up to 30 seconds to kick in.
 - **Requirement:** it needs the extension connected to your Synapse account. Your Synapse dashboard itself is never paused.
 
+## Daily limits
+
+Set limits on the **Screen time** page in Synapse, for example `instagram.com`, 45 minutes a day. The extension checks them every 30 seconds:
+
+- **At 80%:** a notification says how many minutes are left (once per site per day).
+- **At 100%:** the site pauses until midnight with a "reached its daily limit" page, and **Open for 5 minutes** still works.
+- **What counts:** the extension counts this browser's own measured time. The dashboard's progress bars count all your sources, including typed-in and desktop time.
+
 ## What counts as time
 
 A second is credited to a site only when all of these are true:
@@ -54,6 +62,7 @@ The extension can't read your Synapse data. Its key only allows uploading screen
 | `idle` | Stop counting when you're away or the screen is locked. |
 | `alarms` | Checkpoint every minute and sync every 5 minutes. |
 | `storage` | Keep totals and settings on this computer. |
+| `notifications` | The heads-up when you reach 80% of a daily limit. |
 
 No host permissions are requested. The Synapse server allows cross-origin requests on its device endpoints, which use bearer keys only, with no cookies.
 

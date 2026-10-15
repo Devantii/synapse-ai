@@ -316,6 +316,20 @@ tr.muted td { color: var(--ink-3); }
 .keybox code { flex: 1; overflow-wrap: anywhere; font-size: 13px; }
 code { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: .92em; }
 
+/* daily limits */
+.limits { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 14px; }
+.limit-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-size: var(--step--1); margin-bottom: 6px; }
+.limit-head b { font-size: var(--step-0); }
+.limit-head .num { color: var(--ink-2); margin-right: auto; }
+.limit-bar { height: 10px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.limit-bar i { display: block; height: 100%; border-radius: inherit; background: var(--lichen); }
+.limits li.near .limit-bar i { background: var(--amber); }
+.limits li.over .limit-bar i { background: var(--berry); }
+.limits li.over .num { color: var(--berry); font-weight: 700; }
+.limit-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.limit-form .field { margin: 0; }
+@media (max-width: 760px) { .limit-form { grid-template-columns: 1fr 1fr; } .limit-form .btn { grid-column: 1 / -1; justify-content: center; } }
+
 /* ---------- garden ---------- */
 .garden { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; padding: 18px; border-radius: var(--r-lg); background: linear-gradient(transparent 70%, var(--soil) 70%); background-size: 100% 110px; min-height: 140px; }
 .garden figure { margin: 0; text-align: center; }

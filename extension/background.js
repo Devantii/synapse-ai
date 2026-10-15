@@ -24,10 +24,10 @@ const pad = (n) => String(n).padStart(2, '0');
 const localDay = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
 async function load() {
-  const s = await chrome.storage.local.get(['config', 'totals', 'current', 'status', 'focus', 'allowUntil']);
+  const s = await chrome.storage.local.get(['config', 'totals', 'current', 'status', 'focus', 'allowUntil', 'limits', 'limitNotices']);
   const config = { ...DEFAULT_CONFIG, ...(s.config || {}) };
   config.blocking = { ...DEFAULT_BLOCKING, ...(config.blocking || {}) };
-  return { config, totals: s.totals || {}, current: s.current || null, status: s.status || {}, focus: s.focus || null, allowUntil: s.allowUntil || {} };
+  return { config, totals: s.totals || {}, current: s.current || null, status: s.status || {}, focus: s.focus || null, allowUntil: s.allowUntil || {}, limits: s.limits || [], limitNotices: s.limitNotices || {} };
 }
 
 export function hostOf(url) {
@@ -161,47 +161,106 @@ async function ensureAlarms() {
   if (!existing.some((a) => a.name === 'sync')) chrome.alarms.create('sync', { periodInMinutes: SYNC_MIN, delayInMinutes: 1 });
 }
 
-// ---------------- focus-mode blocking ----------------
+// ---------------- pausing sites: focus blocks and daily limits ----------------
 const focusActive = (focus) => !!focus?.focusing && focus.endsAt > Date.now();
+const nextMidnight = () => { const d = new Date(); d.setHours(24, 0, 0, 0); return d.getTime(); };
 
-function shouldBlock(host, s) {
+// Same matching rule as the Synapse server: "Instagram", "instagram.com" and "www.instagram.com" are one app.
+export function appKey(name) {
+  let x = String(name).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').replace(/\.exe$/, '');
+  const parts = x.split('.');
+  if (parts.length > 1 && /^[a-z]{2,6}$/.test(parts[parts.length - 1])) parts.pop();
+  if (parts.length > 1 && ['co', 'com', 'org', 'net', 'ac', 'gov'].includes(parts[parts.length - 1])) parts.pop();
+  return parts.join('.').replace(/\s+/g, '');
+}
+
+/** Minutes spent today on sites matching this limit, from this browser's own measurements. */
+function usedToday(limitApp, s) {
+  const key = appKey(limitApp);
+  const today = s.totals[localDay(Date.now())] || {};
+  let sec = 0;
+  for (const [host, v] of Object.entries(today)) if (appKey(host) === key) sec += v;
+  return sec / 60;
+}
+
+function limitFor(host, s) {
+  const key = appKey(host);
+  return (s.limits || []).find((l) => appKey(l.app) === key) || null;
+}
+
+/** Why this site should be paused right now, or null. */
+function pauseReason(host, s) {
+  if (!host || (s.allowUntil[host] || 0) > Date.now()) return null;
+  if (isExcluded(host, s.config)) return null; // never pause the Synapse dashboard or ignored sites
+  const limit = limitFor(host, s);
+  if (limit) {
+    const used = usedToday(limit.app, s);
+    if (used >= limit.minutes) return { reason: 'limit', until: nextMidnight(), limit: limit.minutes, used: Math.round(used) };
+  }
   const b = s.config.blocking;
-  if (!b.enabled || !focusActive(s.focus) || !host) return false;
-  if ((s.allowUntil[host] || 0) > Date.now()) return false;
-  if (isExcluded(host, s.config)) return false; // never block the Synapse dashboard or ignored sites
-  if ((b.sites || []).some((x) => host === x || host.endsWith('.' + x))) return true;
-  return (b.categories || []).includes(categorize(host, s.config.overrides));
+  if (b.enabled && focusActive(s.focus)) {
+    const listed = (b.sites || []).some((x) => host === x || host.endsWith('.' + x));
+    if (listed || (b.categories || []).includes(categorize(host, s.config.overrides))) return { reason: 'focus', until: s.focus.endsAt };
+  }
+  return null;
 }
 
 async function enforce(tab, s) {
   if (!tab?.id || tab.incognito) return;
   const url = tab.url || tab.pendingUrl || '';
   const host = hostOf(url);
-  if (!shouldBlock(host, s)) return;
-  const page = chrome.runtime.getURL('blocked.html') +
-    `?host=${encodeURIComponent(host)}&until=${s.focus.endsAt}&url=${encodeURIComponent(url)}`;
-  await chrome.tabs.update(tab.id, { url: page }).catch(() => {});
+  const why = pauseReason(host, s);
+  if (!why) return;
+  const q = new URLSearchParams({ host, until: String(why.until), url, reason: why.reason });
+  if (why.reason === 'limit') { q.set('limit', String(why.limit)); q.set('used', String(why.used)); }
+  await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL('blocked.html') + '?' + q }).catch(() => {});
 }
 
 async function enforceAll() {
   const s = await load();
-  if (!focusActive(s.focus) || !s.config.blocking.enabled) return;
+  if (!focusActive(s.focus) && !(s.limits || []).length) return;
   for (const tab of await chrome.tabs.query({})) await enforce(tab, s);
 }
 
-/** Ask Synapse whether a focus block is running. Pauses open distracting tabs when one starts. */
+/** Gentle heads-up at 80% of a daily limit (once per site per day). */
+async function warnNearLimits() {
+  const s = await load();
+  const day = localDay(Date.now());
+  const notices = s.limitNotices[day] ? { [day]: s.limitNotices[day] } : { [day]: {} }; // drop older days
+  let changed = !s.limitNotices[day];
+  for (const l of s.limits || []) {
+    const used = usedToday(l.app, s);
+    const k = appKey(l.app);
+    if (used >= 0.8 * l.minutes && used < l.minutes && !notices[day][k]) {
+      notices[day][k] = true;
+      changed = true;
+      const left = Math.max(1, Math.round(l.minutes - used));
+      chrome.notifications?.create('limit-' + k, {
+        type: 'basic', iconUrl: 'icons/icon128.png', priority: 1,
+        title: `${left} min left on ${l.app} today`,
+        message: `You've used ${Math.round(used)} of your ${l.minutes}-minute daily limit. It pauses when you reach it.`,
+      });
+    }
+  }
+  if (changed) await chrome.storage.local.set({ limitNotices: notices });
+}
+
+/** Ask Synapse for the focus state and daily limits. Pauses matching tabs when a block starts. */
 async function refreshFocus() {
   const s = await load();
-  if (!s.config.server || !s.config.key || !s.config.blocking.enabled) return s.focus;
+  if (!s.config.server || !s.config.key) return s.focus;
   try {
-    const f = await request(s.config.server, s.config.key, 'GET', '/api/device/focus');
+    const [f, l] = await Promise.all([
+      s.config.blocking.enabled ? request(s.config.server, s.config.key, 'GET', '/api/device/focus') : Promise.resolve({ focusing: false }),
+      request(s.config.server, s.config.key, 'GET', '/api/device/limits').catch(() => ({ limits: s.limits })),
+    ]);
     const focus = { focusing: !!f.focusing, endsAt: f.endsAt, checkedAt: Date.now() };
     const started = focusActive(focus) && !focusActive(s.focus);
-    await chrome.storage.local.set({ focus });
-    if (started) await enforceAll();
+    await chrome.storage.local.set({ focus, limits: Array.isArray(l.limits) ? l.limits : [] });
+    if (started) await enforceAll(); // pause already-open distracting tabs the moment a block starts
     return focus;
   } catch {
-    return s.focus; // offline: keep the last known block until it expires on its own
+    return s.focus; // offline: keep the last known block and limits
   }
 }
 
@@ -217,7 +276,11 @@ chrome.tabs.onRemoved.addListener(() => checkpoint());
 chrome.windows.onFocusChanged.addListener(() => checkpoint());
 chrome.alarms.onAlarm.addListener(async (a) => {
   await checkpoint();
-  if (a.name === 'tick') await refreshFocus();
+  if (a.name === 'tick') {
+    await refreshFocus();
+    await enforceAll();
+    await warnNearLimits();
+  }
   if (a.name === 'sync') await sync();
 });
 chrome.runtime.onStartup.addListener(() => { ensureAlarms(); checkpoint(); });
@@ -236,11 +299,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await checkpoint();
         const s = await load();
         const { key, ...safeConfig } = s.config;
-        return reply({ config: { ...safeConfig, hasKey: !!key }, today: s.totals[localDay(Date.now())] || {}, totals: s.totals, current: s.current, status: s.status, focus: focusActive(s.focus) ? s.focus : null });
+        const limits = (s.limits || []).map((l) => ({ ...l, used: Math.round(usedToday(l.app, s) * 10) / 10 }));
+        return reply({ config: { ...safeConfig, hasKey: !!key }, today: s.totals[localDay(Date.now())] || {}, totals: s.totals, current: s.current, status: s.status, focus: focusActive(s.focus) ? s.focus : null, limits });
       }
       case 'sync':
         await checkpoint();
         await refreshFocus();
+        await enforceAll();
         return reply(await sync());
       case 'allowTemp': {
         const host = hostOf('https://' + String(msg.host || ''));
@@ -260,7 +325,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
           sites: (b.sites || []).map((h) => hostOf('https://' + String(h).replace(/^https?:\/\//, '')) || '').filter(Boolean),
         };
         await chrome.storage.local.set({ config: { ...s.config, blocking } });
-        if (blocking.enabled) { await refreshFocus(); await enforceAll(); }
+        await refreshFocus();
+        await enforceAll();
         return reply({ ok: true });
       }
       case 'setPaused': {
@@ -306,5 +372,5 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 });
 
 // Debug/test hook (only reachable from the extension's own devtools).
-self.synapse = { checkpoint, sync, load, buildPayload, refreshFocus, enforceAll };
+self.synapse = { checkpoint, sync, load, buildPayload, refreshFocus, enforceAll, warnNearLimits, appKey };
 ensureAlarms();

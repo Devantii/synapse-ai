@@ -14,12 +14,12 @@
 </style></head>
 <body><main>
   <div class="ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="44" fill="none" stroke="var(--surface-2)" stroke-width="6"/><circle id="arc" cx="50" cy="50" r="44" fill="none" stroke="var(--lichen)" stroke-width="6" stroke-linecap="round" stroke-dasharray="276.5" stroke-dashoffset="0"/></svg><b id="left" role="timer">--:--</b></div>
-  <h1><span class="host" id="host">This site</span> is paused while you focus</h1>
+  <h1><span class="host" id="host">This site</span> <span id="why">is paused while you focus</span></h1>
   <p id="msg">It'll open again when your focus block ends.</p>
   <div class="row">
     <button class="primary" id="back">Back to work</button>
     <button id="allow">Open for 5 minutes</button>
   </div>
-  <p class="muted" style="margin-top:22px;font-size:12px">Paused by Synapse because a focus block is running. Change which sites pause in the extension's settings.</p>
+  <p class="muted" id="foot" style="margin-top:22px;font-size:12px">Paused by Synapse because a focus block is running. Change which sites pause in the extension's settings.</p>
 </main><script src="blocked.js" type="module"></script></body>
 </html>

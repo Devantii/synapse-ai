@@ -737,6 +737,16 @@ VIEWS['screen-time'] = async (main) => {
         <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h2 style="font-size:var(--step-1)">Last 14 days</h2><span class="muted" id="week-avg"></span></div>
         <div class="chart" id="usage-chart"></div><div class="legend" id="legend"></div>
       </section>
+      <section class="panel" id="limits-panel">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h2 style="font-size:var(--step-1);margin:0">Daily limits</h2><small>Today, counted across all your sources</small></div>
+        <p class="muted" style="font-size:var(--step--1);margin:6px 0 14px">Pick a number that feels kind, not punishing. With the browser extension connected, you get a heads-up at 80% and the site pauses at 100% until tomorrow; you can still open it for 5 minutes. Apps and phone time show here as progress only.</p>
+        <div id="limit-list"></div>
+        <form id="limit-form" class="limit-form">
+          <label class="field">App or site<input name="app" maxlength="60" placeholder="instagram.com" list="app-suggest" required /></label>
+          <label class="field">Minutes a day<input name="minutes" type="number" min="5" max="1440" step="5" inputmode="numeric" placeholder="45" required /></label>
+          <button class="btn primary">Set limit</button>
+        </form>
+      </section>
       <div class="split">
         <section class="panel">
           <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:14px">
@@ -784,7 +794,32 @@ VIEWS['screen-time'] = async (main) => {
       <tr><td colspan="2"><b>Total</b></td><td class="r num"><b>${fmtMin(total)}</b></td><td></td></tr></tbody></table>`
       : `<p class="empty">Nothing logged for this day yet.</p>`;
   }
-  await load();
+  async function loadLimits() {
+    const { limits } = await api('GET', `/limits?day=${localDay()}`);
+    $('#limit-list').innerHTML = limits.length ? `<ul class="limits">${limits.map((l) => {
+      const r = Math.min(1, l.ratio);
+      const tone = l.ratio >= 1 ? 'over' : l.ratio >= 0.8 ? 'near' : '';
+      return `<li class="${tone}"><div class="limit-head"><b>${esc(l.app)}</b><span class="num">${fmtMin(l.used)} of ${fmtMin(l.minutes)}${l.ratio >= 1 ? ' · reached' : l.ratio >= 0.8 ? ' · almost there' : ''}</span>
+        <button class="link" data-limit-del="${l.id}" aria-label="Remove limit for ${esc(l.app)}">Remove</button></div>
+        <div class="limit-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${l.minutes}" aria-valuenow="${Math.round(l.used)}" aria-label="${esc(l.app)} today"><i style="width:${(r * 100).toFixed(1)}%"></i></div></li>`;
+    }).join('')}</ul>` : '<p class="empty" style="padding:4px 0 12px">No limits yet. Start with the one app that eats your evenings.</p>';
+  }
+  await Promise.all([load(), loadLimits()]);
+  $('#limit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target.elements;
+    try {
+      const r = await api('PUT', '/limits', { app: f.app.value, minutes: Number(f.minutes.value) });
+      toast(`Daily limit set: ${r.app}, ${fmtMin(r.minutes)}`);
+      e.target.reset();
+      await loadLimits();
+    } catch (err) { fail(err); }
+  });
+  $('#limit-list').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-limit-del]');
+    if (!b) return;
+    try { await api('DELETE', `/limits/${b.dataset.limitDel}`); toast('Limit removed'); await loadLimits(); } catch (err) { fail(err); }
+  });
   $('#usage-day').addEventListener('change', (e) => { if (e.target.value) { day = e.target.value; load().catch(fail); } });
   $('#add-row').addEventListener('click', () => $('#usage-rows').insertAdjacentHTML('beforeend', rowHtml()));
   main.addEventListener('click', async (e) => {

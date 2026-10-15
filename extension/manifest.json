@@ -2,11 +2,11 @@
   "manifest_version": 3,
   "name": "Synapse Screen Time",
   "short_name": "Synapse",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Measures how long you actively spend on each website and syncs daily totals to your Synapse AI account.",
   "minimum_chrome_version": "120",
   "background": { "service_worker": "background.js", "type": "module" },
-  "permissions": ["tabs", "idle", "alarms", "storage"],
+  "permissions": ["tabs", "idle", "alarms", "storage", "notifications"],
   "action": {
     "default_title": "Synapse screen time",
     "default_popup": "popup.html",

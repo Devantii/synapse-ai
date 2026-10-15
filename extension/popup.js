@@ -25,6 +25,18 @@ async function render() {
     return li;
   }));
   $('#empty').hidden = sites.length > 0;
+  $('#limits').hidden = !(s.limits || []).length;
+  $('#limit-list').replaceChildren(...(s.limits || []).map((l) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="host"></span><span class="num muted"></span><span class="bar"><i></i></span>`;
+    li.querySelector('.host').textContent = l.app;
+    li.querySelector('.num').textContent = `${Math.round(l.used)} / ${l.minutes} min`;
+    const r = Math.min(1, l.used / l.minutes);
+    const bar = li.querySelector('i');
+    bar.style.width = `${r * 100}%`;
+    bar.style.background = r >= 1 ? 'var(--berry)' : r >= 0.8 ? 'var(--amber)' : 'var(--lichen)';
+    return li;
+  }));
   const st = $('#status');
   if (!s.config.server || !s.config.hasKey) { st.className = 'status err'; st.textContent = 'Not connected to Synapse. Totals are kept on this computer until you connect in Settings.'; }
   else if (s.status.ok === false && s.status.lastError) { st.className = 'status err'; st.textContent = `Last sync failed: ${s.status.lastError}`; }
