@@ -28,12 +28,25 @@ const state = { token: store.get('synapse.token'), me: null, socket: null, clean
 
 // ---------------------------------------------------------------- api
 class ApiError extends Error { constructor(msg, status, data) { super(msg); this.status = status; this.data = data; } }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function api(method, url, body) {
-  const res = await fetch('/api' + url, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: 'Bearer ' + state.token } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  // The free server sleeps when idle and restarts on each deploy, so a read that can't reach it
+  // (network error or 502/503/504) is retried quietly a few times before showing an error.
+  const tries = method === 'GET' ? 4 : 2;
+  let res;
+  for (let i = 0; i < tries; i++) {
+    try {
+      res = await fetch('/api' + url, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: 'Bearer ' + state.token } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (![502, 503, 504].includes(res.status) || i === tries - 1) break;
+    } catch (e) {
+      if (i === tries - 1) throw new ApiError(navigator.onLine === false ? "You're offline. Check your connection and try again." : "Can't reach Synapse right now. The server may be waking up or updating; try again in a minute.", 0);
+    }
+    await sleep(1500 * 2 ** i);
+  }
   let data = null;
   try { data = await res.json(); } catch {}
   if (res.status === 401 && state.token && !url.startsWith('/auth') && url !== '/account') { signOut('Your session ended. Please sign in again.'); throw new ApiError('Signed out', 401); }
@@ -730,7 +743,8 @@ async function route() {
   const old = $('#main');
   const main = old.cloneNode(false);
   old.replaceWith(main);
-  try { await VIEWS[name](main, arg ? decodeURIComponent(arg) : null); } catch (e) { fail(e); }
+  // A page you've already left can still finish loading (slow server); its errors don't matter any more.
+  try { await VIEWS[name](main, arg ? decodeURIComponent(arg) : null); } catch (e) { if (main.isConnected) fail(e); else console.warn('[stale view]', name, e); }
   paintTimer();
 }
 window.addEventListener('hashchange', () => { route(); $('#main').focus({ preventScroll: true }); window.scrollTo(0, 0); });
@@ -1800,13 +1814,16 @@ VIEWS.community = async (main) => {
     const qs = new URLSearchParams({ limit: 15 });
     if (tab === 'top') { qs.set('sort', 'top'); if (!reset) qs.set('offset', offset); }
     if (tab === 'mine' || tab === 'buddies') qs.set('scope', tab);
-    if ($('#mood-filter').value) qs.set('mood', $('#mood-filter').value);
-    if ($('#feed-search').value.trim()) qs.set('q', $('#feed-search').value.trim());
+    if (!feed.isConnected) return;
+    const moodF = $('#mood-filter')?.value || '', qF = $('#feed-search')?.value.trim() || '';
+    if (moodF) qs.set('mood', moodF);
+    if (qF) qs.set('q', qF);
     if (!reset && oldest && tab !== 'top') qs.set('before', oldest);
     const r = await api('GET', `/posts?${qs}`);
+    if (!feed.isConnected) return; // left Community while this was loading
     if (reset) { feed.innerHTML = ''; offset = 0; }
     offset += r.posts.length;
-    const filtered = tab !== 'latest' || $('#mood-filter').value || $('#feed-search').value.trim();
+    const filtered = tab !== 'latest' || moodF || qF;
     feed.insertAdjacentHTML('beforeend', r.posts.map(postHtml).join(''));
     if (reset && sampleOn() && !filtered) feed.insertAdjacentHTML('beforeend', SAMPLE.posts.map((p) => `
       <li class="post sample"><header><b>${esc(p.author)}</b>${sampleTag}<span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood])}</span><time>${ago(sampleAgo(p.ago))}</time></header>
@@ -1824,6 +1841,7 @@ VIEWS.community = async (main) => {
       : `<li class="empty">No check-ins yet. Share how today's focus went and you'll be the first.</li>`;
   }
   await load(true);
+  if (!feed.isConnected) return; // left Community while it was loading
   $$('[data-tab]').forEach((b) => b.addEventListener('click', () => {
     tab = b.dataset.tab; oldest = null;
     $$('[data-tab]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
