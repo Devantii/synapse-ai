@@ -1,0 +1,69 @@
+# Runs on every push and pull request: the backend suite on SQLite and PostgreSQL,
+# the desktop tracker tests, and a syntax check of the dashboard and extension.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: synapse_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Tests on SQLite
+        run: npm test
+      - name: Tests on PostgreSQL
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/synapse_test
+
+  desktop-tracker:
+    name: Desktop tracker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python desktop-tracker/test_tracker.py
+
+  frontend:
+    name: Dashboard + extension syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check every browser script parses
+        run: |
+          for f in backend/public/*.js extension/*.js; do
+            node --check "$f" || exit 1
+          done
+      - name: Extension manifest is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
