@@ -285,6 +285,21 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert(r.data.mode === 'mesh');
   });
 
+  console.log('Progress');
+  await test('stats summarise sessions, hours, lengths and weeks', async () => {
+    const r = await api('GET', '/api/stats?days=30&today=' + today, null, A);
+    assert(r.status === 200, JSON.stringify(r.data));
+    const d = r.data;
+    assert(d.totals.sessions === 1 && d.totals.focusMinutes === 25 && d.totals.breaks === 1, JSON.stringify(d.totals));
+    assert(Math.abs(d.totals.completionRate - 0.5) < 1e-9, 'one finished, one abandoned');
+    assert(d.daily[today] === 25 && d.hours[9].minutes === 25 && d.hours[23].minutes === 0, 'hour of day uses local start time');
+    assert(d.weeks.length === 8 && d.weeks[7].focus === 25 && d.weeks[7].screen > 0, JSON.stringify(d.weeks[7]));
+    assert(d.lengths.find((l) => l.planned === 25).completed === 1 && d.lengths.find((l) => l.planned === 50).completed === 0);
+    assert(d.tags[0].tag === 'Thesis' && d.tags[0].minutes === 25);
+    const other = await api('GET', '/api/stats', null, B);
+    assert(other.data.totals.sessions === 0, 'stats are private');
+  });
+
   console.log('Daily limits');
   await test('set, update, list with today\'s usage, delete', async () => {
     // instagram.com 210 (extension) overshadows typed Instagram 180, see overlap rule

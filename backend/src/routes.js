@@ -316,6 +316,87 @@ post('/coach', coachLimiter, requireConsent('ai_insights', 'AI wellbeing insight
 // ---------- rewards ----------
 get('/rewards', async (req, res) => res.json(await game.summary(req.user.id)));
 
+// ---------- progress stats ----------
+// Everything the Progress page needs, computed from the user's own sessions and screen time.
+get('/stats', async (req, res) => {
+  const today = req.query.today ? validDay(req.query.today, { maxPastDays: 2 }) : serverToday();
+  const days = Math.min(371, Math.max(7, parseInt(req.query.days, 10) || 182));
+  const shift = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+  const from = shift(today, -(days - 1));
+  const sessions = await db.all(
+    'SELECT kind, planned_min, actual_min, completed, tag, day, started_at FROM focus_sessions WHERE user_id = ? AND day BETWEEN ? AND ?',
+    [req.user.id, from, today]
+  );
+  const usage = dedupe(await db.all(
+    'SELECT day, app, category, minutes, source FROM app_usage WHERE user_id = ? AND day BETWEEN ? AND ?',
+    [req.user.id, shift(today, -55), today]
+  ));
+
+  // Daily focus minutes (completed focus blocks) for the heatmap.
+  const daily = {};
+  for (const s of sessions) if (s.kind === 'focus' && s.completed) daily[s.day] = (daily[s.day] || 0) + s.actual_min;
+
+  // Last 8 weeks (ending today): focus vs screen time, both in minutes.
+  const weeks = [];
+  for (let w = 7; w >= 0; w--) {
+    const end = shift(today, -7 * w), start = shift(end, -6);
+    const inWeek = (d) => d >= start && d <= end;
+    weeks.push({
+      start, end,
+      focus: Math.round(Object.entries(daily).filter(([d]) => inWeek(d)).reduce((a, [, m]) => a + m, 0)),
+      screen: Math.round(usage.filter((u) => inWeek(u.day)).reduce((a, u) => a + u.total, 0)),
+      screenDays: usage.filter((u) => inWeek(u.day)).length,
+    });
+  }
+
+  // When you focus: completed focus minutes by local starting hour.
+  const hours = Array.from({ length: 24 }, (_, h) => ({ hour: h, minutes: 0, sessions: 0 }));
+  for (const s of sessions) {
+    if (s.kind !== 'focus' || !s.completed) continue;
+    const h = parseInt(String(s.started_at).slice(11, 13), 10);
+    if (h >= 0 && h < 24) { hours[h].minutes += s.actual_min; hours[h].sessions += 1; }
+  }
+  hours.forEach((h) => (h.minutes = Math.round(h.minutes)));
+
+  // Which block lengths you actually finish.
+  const lengths = {};
+  for (const s of sessions) {
+    if (s.kind !== 'focus') continue;
+    const k = s.planned_min;
+    lengths[k] ??= { planned: k, started: 0, completed: 0 };
+    lengths[k].started += 1;
+    if (s.completed) lengths[k].completed += 1;
+  }
+
+  // What you focus on.
+  const tags = {};
+  for (const s of sessions) if (s.kind === 'focus' && s.completed && s.tag) tags[s.tag] = (tags[s.tag] || 0) + s.actual_min;
+
+  const focusSessions = sessions.filter((s) => s.kind === 'focus');
+  const done = focusSessions.filter((s) => s.completed);
+  const activeDays = Object.keys(daily).length;
+  const totalFocus = done.reduce((a, s) => a + s.actual_min, 0);
+  const rewards = await game.summary(req.user.id);
+  res.json({
+    from, today, days,
+    totals: {
+      focusMinutes: Math.round(totalFocus),
+      sessions: done.length,
+      breaks: sessions.filter((s) => s.kind === 'break' && s.completed).length,
+      completionRate: focusSessions.length ? done.length / focusSessions.length : null,
+      activeDays,
+      avgPerActiveDay: activeDays ? Math.round(totalFocus / activeDays) : 0,
+      bestStreak: rewards.bestStreak,
+      currentStreak: rewards.currentStreak,
+    },
+    daily,
+    weeks,
+    hours,
+    lengths: Object.values(lengths).sort((a, b) => a.planned - b.planned),
+    tags: Object.entries(tags).map(([tag, minutes]) => ({ tag, minutes: Math.round(minutes) })).sort((a, b) => b.minutes - a.minutes).slice(0, 8),
+  });
+});
+
 // ---------- community ----------
 const MOODS = ['calm', 'focused', 'proud', 'tired', 'stressed', 'hopeful'];
 const REACTIONS = ['cheer', 'hug', 'same'];

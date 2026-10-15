@@ -215,7 +215,11 @@ const timer = {
     this.s.running = false;
     if (!completed && s.mode === 'focus') this.withered = true;
     this.save(); this.broadcast();
-    if (completed) chime();
+    if (completed) {
+      chime();
+      if (s.mode === 'focus') notify('Focus block done', `Nice work. Take a ${s.planned >= 50 ? 10 : 5}-minute break: stretch, breathe or rest your eyes.`);
+      else notify("Break's over", 'Ready for the next focus block?');
+    }
     try {
       if (state.me.consents.activity_tracking) {
         const started = new Date(s.startedAt);
@@ -303,9 +307,109 @@ function paintTimer() {
     $('.presets').hidden = timer.s.running;
     $('.presets').innerHTML = PRESETS[timer.s.mode].map((m) => `<button class="chip" aria-pressed="${m === timer.s.planned}" data-preset="${m}">${m} min</button>`).join('');
     $('#tag-field').hidden = timer.s.running || timer.s.mode !== 'focus';
+    breakGuide.sync();
   }
   if (ctr) $$('[data-preset]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.preset === timer.s.planned)));
 }
+
+// ---------------------------------------------------------------- guided breaks
+// Short routines that make a break restorative instead of a phone scroll.
+const GUIDES = {
+  breathe: { label: 'Breathe', blurb: 'Box breathing calms your nervous system in about a minute.' },
+  stretch: {
+    label: 'Stretch', blurb: 'Loosen what sitting tightens. 30 seconds each.',
+    steps: [
+      ['Neck', 'Drop your right ear toward your shoulder, breathe, then switch sides.'],
+      ['Shoulders', 'Roll your shoulders back slowly ten times, then forward ten times.'],
+      ['Chest', 'Clasp your hands behind your back and gently lift them as you open your chest.'],
+      ['Wrists', 'Stretch each arm out, palm up, and gently pull your fingers back with the other hand.'],
+      ['Reach', 'Stand up, reach both arms overhead and lean slowly to each side.'],
+    ],
+  },
+  eyes: {
+    label: 'Rest your eyes', blurb: 'The 20-20-20 rule eases screen strain.',
+    steps: [
+      ['Look far', 'Find something at least 6 metres (20 ft) away and look at it.'],
+      ['Blink', 'Blink slowly and fully, about ten times.'],
+      ['Palm', 'Close your eyes and cup your palms over them. Let the darkness rest them.'],
+    ],
+    secs: 20,
+  },
+  move: {
+    label: 'Move', blurb: 'Your body has been still. Pick any two.',
+    checklist: ['Refill your water and drink half a glass', 'Walk to a window or step outside', 'Do 10 slow calf raises', 'Look away from every screen, including your phone'],
+  },
+};
+const breakGuide = {
+  timer: null,
+  kind: store.get('synapse.breakGuide') || 'breathe',
+  stop() { clearTimeout(this.timer); this.timer = null; },
+  sync() {
+    const el = $('#break-guide');
+    if (!el) return this.stop();
+    const show = timer.s.mode === 'break';
+    if (!show) { el.hidden = true; el.innerHTML = ''; return this.stop(); }
+    if (!el.hidden && el.dataset.kind === this.kind) return;
+    el.hidden = false;
+    this.render(el);
+  },
+  choose(kind) { this.kind = kind; store.set('synapse.breakGuide', kind); const el = $('#break-guide'); if (el) this.render(el); },
+  render(el) {
+    this.stop();
+    el.dataset.kind = this.kind;
+    const g = GUIDES[this.kind];
+    el.innerHTML = `
+      <div class="chips" role="tablist" aria-label="Break activity">${Object.entries(GUIDES).map(([k, v]) =>
+        `<button class="chip" role="tab" aria-selected="${k === this.kind}" aria-pressed="${k === this.kind}" data-guide="${k}">${v.label}</button>`).join('')}</div>
+      <p class="muted guide-blurb">${g.blurb}</p>
+      <div class="guide-body" aria-live="polite"></div>`;
+    el.onclick = (e) => { const b = e.target.closest('[data-guide]'); if (b) this.choose(b.dataset.guide); };
+    const body = $('.guide-body', el);
+    if (this.kind === 'breathe') return this.breathe(body);
+    if (g.checklist) {
+      body.innerHTML = `<ul class="guide-check">${g.checklist.map((c, i) => `<li><label><input type="checkbox" id="gc${i}" /> ${c}</label></li>`).join('')}</ul>`;
+      return;
+    }
+    this.steps(body, g.steps, g.secs || 30);
+  },
+  breathe(body) {
+    const phases = [['Breathe in', 1], ['Hold', 1], ['Breathe out', 0.55], ['Hold', 0.55]];
+    body.innerHTML = `<div class="breath"><div class="breath-orb"></div><div class="breath-text"><b></b><span class="num"></span></div></div><p class="muted guide-foot">Four counts each. <span class="num" id="breath-rounds">0</span> rounds so far.</p>`;
+    const orb = $('.breath-orb', body), word = $('.breath-text b', body), count = $('.breath-text span', body);
+    let phase = 0, n = 4, rounds = 0;
+    const step = () => {
+      if (!body.isConnected) return this.stop();
+      if (n === 4) { word.textContent = phases[phase][0]; orb.style.transform = `scale(${phases[phase][1]})`; }
+      count.textContent = n;
+      n -= 1;
+      if (n === 0) { n = 4; phase = (phase + 1) % 4; if (phase === 0) $('#breath-rounds', body).textContent = ++rounds; }
+      this.timer = setTimeout(step, 1000);
+    };
+    step();
+  },
+  steps(body, steps, secs) {
+    let i = 0, left = secs;
+    body.innerHTML = `<div class="guide-step"><div class="guide-count num"></div><div><b class="guide-title"></b><p class="guide-text"></p></div></div>
+      <div class="guide-nav"><span class="muted num guide-pos"></span><button class="btn quiet" data-next>Next</button></div>`;
+    const paint = () => {
+      $('.guide-title', body).textContent = steps[i][0];
+      $('.guide-text', body).textContent = steps[i][1];
+      $('.guide-count', body).textContent = left;
+      $('.guide-pos', body).textContent = `${i + 1} of ${steps.length}`;
+      $('[data-next]', body).textContent = i === steps.length - 1 ? 'Start over' : 'Next';
+    };
+    const next = () => { i = (i + 1) % steps.length; left = secs; paint(); };
+    $('[data-next]', body).onclick = () => { next(); };
+    const tick = () => {
+      if (!body.isConnected) return this.stop();
+      left -= 1;
+      if (left <= 0) { if (i === steps.length - 1) { left = 0; paint(); $('.guide-count', body).textContent = '✓'; return; } next(); } else paint();
+      this.timer = setTimeout(tick, 1000);
+    };
+    paint();
+    this.timer = setTimeout(tick, 1000);
+  },
+};
 
 // ---------------------------------------------------------------- router
 const VIEWS = {};
@@ -314,6 +418,8 @@ async function route() {
   if (!state.me) return;
   state.cleanup.forEach((f) => { try { f(); } catch {} });
   state.cleanup = [];
+  breakGuide.stop();
+  const tip = document.getElementById('chart-tip'); if (tip) tip.hidden = true;
   const [view, arg] = location.hash.replace(/^#\//, '').split('/');
   const name = VIEWS[view] ? view : 'today';
   $$('.rail a').forEach((a) => (a.dataset.nav === name ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
@@ -345,6 +451,7 @@ VIEWS.today = async (main) => {
         <label class="field" id="tag-field" style="width:min(320px,100%);margin:0">What are you working on? <small>Optional</small>
           <input id="tag" maxlength="40" placeholder="Chapter 3 notes" value="${esc(timer.s.tag)}" /></label>
         <div class="timer-controls"></div>
+        <div id="break-guide" class="break-guide" hidden></div>
       </section>
       <section class="today-side" id="today-side"></section>
     </div>`;
@@ -368,6 +475,7 @@ async function renderTodaySide() {
   const side = $('#today-side');
   if (!side) return;
   const [rewards, sessions] = await Promise.all([api('GET', '/rewards'), api('GET', '/sessions?days=2')]);
+  side.onclick = (e) => { if (e.target.closest('#notify-on')) enableNotifications(); };
   state.me.rewards = rewards;
   const today = sessions.filter((s) => s.day === localDay());
   const focusMin = today.filter((s) => s.kind === 'focus' && s.completed).reduce((a, s) => a + s.actual_min, 0);
@@ -392,6 +500,7 @@ async function renderTodaySide() {
       <li><span><i class="dot ${s.kind === 'break' ? 'break' : s.completed ? '' : 'abandoned'}"></i>${s.kind === 'break' ? 'Break' : esc(s.tag || 'Focus')}${s.completed ? '' : ' (ended early)'}</span>
       <span class="muted num">${s.started_at.slice(11, 16)} · ${fmtMin(s.actual_min)}</span></li>`).join('')}</ul>`
       : `<p class="empty">No sessions yet today. A 15-minute block is a good way in.</p>`}
+    ${notifySupported() && Notification.permission === 'default' ? `<p class="note" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span>Get a notification when a session ends, even if this tab is in the background.</span><button class="btn" id="notify-on">Turn on</button></p>` : ''}
     ${state.me.consents.activity_tracking ? '' : `<p class="note"><strong>Sessions aren't being saved.</strong> Turn on "Save focus activity" in <a href="#/privacy">Privacy</a> to earn points and grow trees.</p>`}`;
 }
 
@@ -877,6 +986,162 @@ function drawUsageChart(daily) {
   $('#week-avg').textContent = last7.length ? `7-day average ${fmtMin(last7.reduce((s, d) => s + d.total, 0) / last7.length)} on logged days` : '';
 }
 
+// ---------------------------------------------------------------- Progress
+const tipEl = () => document.getElementById('chart-tip') || document.body.appendChild(Object.assign(document.createElement('div'), { id: 'chart-tip', className: 'chart-tip', role: 'status' }));
+function wireTips(root) {
+  const tip = tipEl();
+  const show = (e) => {
+    const t = e.target.closest('[data-tip]');
+    if (!t || !root.contains(t)) { tip.hidden = true; return; }
+    tip.textContent = t.dataset.tip;
+    tip.hidden = false;
+    const r = t.getBoundingClientRect();
+    const x = Math.min(window.innerWidth - tip.offsetWidth - 8, Math.max(8, r.left + r.width / 2 - tip.offsetWidth / 2));
+    const y = r.top - tip.offsetHeight - 8 < 8 ? r.bottom + 8 : r.top - tip.offsetHeight - 8;
+    tip.style.transform = `translate(${x}px, ${y}px)`;
+  };
+  root.addEventListener('pointerover', show);
+  root.addEventListener('focusin', show);
+  root.addEventListener('pointerleave', () => (tip.hidden = true));
+  root.addEventListener('focusout', () => (tip.hidden = true));
+  tip.hidden = true;
+}
+const hourLabel = (h) => (h === 0 ? '12 am' : h < 12 ? `${h} am` : h === 12 ? '12 pm' : `${h - 12} pm`);
+const shortDate = (d) => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+function heatmapSvg(daily, today, weeks = 26) {
+  const end = new Date(today + 'T12:00:00');
+  const dow = (end.getDay() + 6) % 7; // Monday = 0
+  const start = new Date(end); start.setDate(end.getDate() - dow - (weeks - 1) * 7);
+  const cell = 15, gap = 4, L = 32, T = 20;
+  const level = (m) => (!m ? 0 : m < 25 ? 1 : m < 60 ? 2 : m < 120 ? 3 : 4);
+  let rects = '', months = '', lastMonth = -1;
+  for (let w = 0; w < weeks; w++) {
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(start); day.setDate(start.getDate() + w * 7 + d);
+      if (day > end) continue;
+      const key = localDay(day);
+      const m = Math.round(daily[key] || 0);
+      const x = L + w * (cell + gap), y = T + d * (cell + gap);
+      rects += `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3" class="hm l${level(m)}" tabindex="-1" data-tip="${shortDate(key)}: ${m ? fmtMin(m) + ' focused' : 'no focus logged'}"></rect>`;
+      if (d === 0 && day.getMonth() !== lastMonth) {
+        lastMonth = day.getMonth();
+        if (w < weeks - 1) months += `<text x="${x}" y="11">${day.toLocaleDateString(undefined, { month: 'short' })}</text>`;
+      }
+    }
+  }
+  const days = ['Mon', '', 'Wed', '', 'Fri', '', ''].map((t, i) => (t ? `<text x="0" y="${T + i * (cell + gap) + 11}">${t}</text>` : '')).join('');
+  const W = L + weeks * (cell + gap), H = T + 7 * (cell + gap);
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" role="img" aria-label="Focus minutes per day for the last ${weeks} weeks">${months}${days}${rects}</svg>`;
+}
+
+function weeklySvg(weeks) {
+  const W = 640, H = 220, L = 34, B = 26, T = 22, R = 8;
+  const max = Math.max(60, ...weeks.flatMap((w) => [w.focus, w.screen]));
+  const step = max <= 600 ? 120 : max <= 1800 ? 300 : max <= 3600 ? 600 : 1200;
+  const top = Math.ceil(max / step) * step;
+  const y = (m) => H - B - (m / top) * (H - B - T);
+  const gw = (W - L - R) / weeks.length, bw = Math.min(22, gw * 0.3);
+  let grid = '', bars = '';
+  for (let m = 0; m <= top; m += step) grid += `<line x1="${L}" x2="${W - R}" y1="${y(m)}" y2="${y(m)}" class="grid${m ? '' : ' base'}"/><text x="${L - 6}" y="${y(m) + 4}" text-anchor="end">${m / 60}h</text>`;
+  const bar = (x, v, cls, tip) => {
+    const h = Math.max(v ? 2 : 0, H - B - y(v));
+    if (!h) return `<rect x="${x}" y="${H - B - 1}" width="${bw}" height="1" class="${cls} empty" data-tip="${tip}"></rect>`;
+    const r = Math.min(4, h / 2, bw / 2), yy = H - B - h;
+    return `<path class="${cls}" d="M${x},${H - B} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${H - B} Z" data-tip="${tip}"></path>
+      <rect x="${x - 3}" y="${T}" width="${bw + 6}" height="${H - B - T}" fill="transparent" data-tip="${tip}"></rect>`;
+  };
+  weeks.forEach((w, i) => {
+    const cx = L + gw * i + gw / 2;
+    const label = `${shortDate(w.start)}–${shortDate(w.end)}`;
+    bars += bar(cx - bw - 1, w.focus, 'bar-focus', `${label}: ${fmtMin(w.focus)} focused`);
+    bars += bar(cx + 1, w.screen, 'bar-screen', `${label}: ${w.screenDays ? fmtMin(w.screen) + ' screen time (' + w.screenDays + ' logged ' + (w.screenDays === 1 ? 'day' : 'days') + ')' : 'no screen time logged'}`);
+    if (i % 2 === 1 || i === weeks.length - 1) bars += `<text x="${cx}" y="${H - 8}" text-anchor="middle">${i === weeks.length - 1 ? 'This week' : shortDate(w.start)}</text>`;
+  });
+  const direct = ''; // this week's values are stated in the chart subtitle instead, so no label collides with a bar
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weekly focus time and screen time for the last 8 weeks">${grid}${bars}${direct}</svg>`;
+}
+
+function hoursSvg(hours) {
+  const W = 640, H = 170, L = 8, B = 24, T = 10;
+  const max = Math.max(1, ...hours.map((h) => h.minutes));
+  const top3 = [...hours].filter((h) => h.minutes).sort((a, b) => b.minutes - a.minutes).slice(0, 3).map((h) => h.hour);
+  const bw = (W - L * 2) / 24;
+  let out = `<line x1="${L}" x2="${W - L}" y1="${H - B}" y2="${H - B}" class="grid base"/>`;
+  hours.forEach((h) => {
+    const x = L + h.hour * bw + 2, w = bw - 4;
+    const hh = h.minutes ? Math.max(3, (h.minutes / max) * (H - B - T)) : 0;
+    const tip = `${hourLabel(h.hour)}–${hourLabel((h.hour + 1) % 24)}: ${h.minutes ? fmtMin(h.minutes) + ' across ' + h.sessions + ' ' + (h.sessions === 1 ? 'block' : 'blocks') : 'no completed blocks'}`;
+    if (hh) {
+      const r = Math.min(4, hh / 2), yy = H - B - hh;
+      out += `<path class="${top3.includes(h.hour) ? 'bar-focus' : 'bar-focus soft'}" d="M${x},${H - B} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + w - r} Q${x + w},${yy} ${x + w},${yy + r} V${H - B} Z"></path>`;
+    }
+    out += `<rect x="${x - 2}" y="${T}" width="${w + 4}" height="${H - B - T}" fill="transparent" data-tip="${tip}"></rect>`;
+    if (h.hour % 3 === 0) out += `<text x="${x + w / 2}" y="${H - 7}" text-anchor="middle">${hourLabel(h.hour).replace(' ', '')}</text>`;
+  });
+  return { svg: `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Completed focus minutes by hour of day">${out}</svg>`, top3 };
+}
+
+VIEWS.progress = async (main) => {
+  const d = await api('GET', `/stats?days=182&today=${localDay()}`);
+  const t = d.totals;
+  const pct = (x) => (x == null ? '–' : `${Math.round(x * 100)}%`);
+  if (!t.sessions && !d.weeks.some((w) => w.screen)) {
+    main.innerHTML = `<div class="page-head"><div><h1>Progress</h1><p>Your focus patterns over the last six months.</p></div></div>
+      <section class="panel"><h2>Nothing to chart yet</h2><p>Finish a focus block on <a href="#/today">Today</a> and this page fills in: a calendar of your focus days, weekly trends, and the hours you focus best.</p></section>`;
+    return;
+  }
+  const { svg: hoursChart, top3 } = hoursSvg(d.hours);
+  const bestHours = top3.length ? top3.slice().sort((a, b) => a - b).map((h) => `${hourLabel(h)}–${hourLabel((h + 1) % 24)}`) : [];
+  const finishedBest = d.lengths.filter((l) => l.started >= 2).sort((a, b) => b.completed / b.started - a.completed / a.started)[0];
+  const thisWeek = d.weeks[7], lastWeek = d.weeks[6];
+  const trend = lastWeek.focus ? Math.round(((thisWeek.focus - lastWeek.focus) / lastWeek.focus) * 100) : null;
+  const maxTag = Math.max(1, ...d.tags.map((x) => x.minutes));
+  main.innerHTML = `
+    <div class="page-head"><div><h1>Progress</h1><p>Your focus patterns over the last six months. Hover or tap any square or bar for details.</p></div></div>
+    <div class="progress stack">
+      <div class="statline progress-stats">
+        <div><b class="num">${fmtMin(t.focusMinutes)}</b><span>focused in 6 months</span></div>
+        <div><b class="num">${t.sessions}</b><span>blocks finished</span></div>
+        <div><b class="num">${pct(t.completionRate)}</b><span>of blocks finished</span></div>
+        <div><b class="num">${t.bestStreak}</b><span>day best streak</span></div>
+      </div>
+      <section class="panel">
+        <div class="chart-head"><h2>Focus calendar</h2><span class="muted">${t.activeDays} focus ${t.activeDays === 1 ? 'day' : 'days'} · ${fmtMin(t.avgPerActiveDay)} on an average focus day</span></div>
+        <div class="heatmap">${heatmapSvg(d.daily, d.today)}</div>
+        <div class="hm-legend" aria-hidden="true">Less <i class="l0"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i> More <span class="muted">(under 25 min · 1 h · 2 h · 2 h+)</span></div>
+      </section>
+      <div class="grid-2">
+        <section class="panel">
+          <div class="chart-head"><h2>Focus vs screen time, by week</h2><span class="muted">This week: ${fmtMin(thisWeek.focus)} focus${thisWeek.screenDays ? `, ${fmtMin(thisWeek.screen)} screen time` : ''}${trend == null ? '' : trend >= 0 ? ` · focus up ${trend}%` : ` · focus down ${-trend}%`}</span></div>
+          <div class="legend"><span><i style="background:var(--c-focus)"></i>Focus time</span><span><i style="background:var(--c-screen)"></i>Screen time (logged days)</span></div>
+          <div class="chart pchart">${weeklySvg(d.weeks)}</div>
+          <details><summary>Show as table</summary><table class="usage-table"><thead><tr><th>Week</th><th class="r">Focus</th><th class="r">Screen time</th></tr></thead><tbody>
+            ${d.weeks.slice().reverse().map((w) => `<tr><td>${shortDate(w.start)}–${shortDate(w.end)}</td><td class="r num">${fmtMin(w.focus)}</td><td class="r num">${w.screenDays ? fmtMin(w.screen) : '–'}</td></tr>`).join('')}</tbody></table></details>
+        </section>
+        <section class="panel">
+          <div class="chart-head"><h2>When you focus</h2></div>
+          <p class="muted chart-note">${bestHours.length ? `Your strongest hours: <b>${bestHours.join(', ')}</b>. Try protecting them for your hardest work.` : 'Finish a few blocks to see your strongest hours.'}</p>
+          <div class="chart pchart">${hoursChart}</div>
+        </section>
+      </div>
+      <div class="grid-2">
+        <section class="panel">
+          <div class="chart-head"><h2>Block lengths you finish</h2></div>
+          ${d.lengths.length ? `<ul class="limits">${d.lengths.map((l) => `<li><div class="limit-head"><b>${l.planned} min</b><span class="num">finished ${l.completed} of ${l.started} (${pct(l.completed / l.started)})</span></div>
+            <div class="limit-bar"><i style="width:${(l.completed / l.started) * 100}%"></i></div></li>`).join('')}</ul>
+            ${finishedBest ? `<p class="muted chart-note">You finish ${finishedBest.planned}-minute blocks most reliably. If longer ones keep ending early, lean on those.</p>` : ''}` : '<p class="empty">No focus blocks yet.</p>'}
+        </section>
+        <section class="panel">
+          <div class="chart-head"><h2>What you focus on</h2></div>
+          ${d.tags.length ? `<ul class="limits">${d.tags.map((x) => `<li><div class="limit-head"><b>${esc(x.tag)}</b><span class="num">${fmtMin(x.minutes)}</span></div><div class="limit-bar"><i style="width:${(x.minutes / maxTag) * 100}%"></i></div></li>`).join('')}</ul>`
+            : '<p class="empty">Add a label in "What are you working on?" when you start a block, and your top topics appear here.</p>'}
+        </section>
+      </div>
+    </div>`;
+  wireTips($('.progress', main));
+};
+
 // ---------------------------------------------------------------- Insights
 VIEWS.insights = async (main) => {
   if (!state.me.consents.ai_insights) {
@@ -1100,6 +1365,47 @@ VIEWS.privacy = async (main) => {
     catch (err) { $('.form-error', dlg).textContent = err.message; }
   });
 };
+
+// ---------------------------------------------------------------- installable app + notifications
+let swReg = null;
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  navigator.serviceWorker.register('/sw.js').then((r) => { swReg = r; }).catch(() => {});
+}
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  if (matchMedia('(max-width: 760px)').matches) return; // phones: keep the browser's own install banner
+  e.preventDefault();
+  installPrompt = e;
+  $('#install').hidden = false;
+});
+window.addEventListener('appinstalled', () => { installPrompt = null; $('#install').hidden = true; toast('Synapse is installed. Open it from your apps.'); });
+$('#install').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice.catch(() => {});
+  installPrompt = null;
+  $('#install').hidden = true;
+});
+
+const notifySupported = () => 'Notification' in window;
+async function enableNotifications() {
+  if (!notifySupported()) return toast('This browser does not support notifications.', 'err');
+  const p = await Notification.requestPermission();
+  if (p === 'granted') { toast("You'll get a notification when a session ends."); notify('Notifications are on', 'Synapse will tell you when a focus block or break ends.', true); }
+  else toast('Notifications are blocked. You can allow them in your browser settings for this site.');
+  if (currentView() === 'today') renderTodaySide();
+}
+/** System notification; skipped while you're looking at the tab unless `always`. */
+async function notify(title, body, always = false) {
+  if (!notifySupported() || Notification.permission !== 'granted') return;
+  if (!always && document.visibilityState === 'visible' && document.hasFocus()) return;
+  const opts = { body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png', tag: 'synapse-timer', renotify: true };
+  try {
+    const reg = swReg || (await navigator.serviceWorker?.getRegistration());
+    if (reg) return reg.showNotification(title, opts);
+    new Notification(title, opts);
+  } catch {}
+}
 
 // ---------------------------------------------------------------- boot
 $('#logout').addEventListener('click', () => signOut());

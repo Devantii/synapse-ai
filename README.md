@@ -1,5 +1,7 @@
 # Synapse AI
 
+[![CI](https://github.com/Devantii/synapse-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Devantii/synapse-ai/actions/workflows/ci.yml)
+
 A digital burnout prevention system: Pomodoro focus timer with restorative breaks, a growing tree garden, live focus rooms with chat and optional voice, a supportive community feed, screen-time logging, and explainable wellbeing insights from a machine-learning model plus fuzzy logic.
 
 One Node.js server (Express + Socket.IO, with PostgreSQL or SQLite) serves both the API and the responsive web dashboard, so there is a single URL and no separate frontend build. A browser extension and a Windows desktop tracker add automatic screen-time measurement, and an optional LiveKit server scales voice rooms.
@@ -23,7 +25,7 @@ synapse-ai/
     │   ├── usage.js         merges overlapping screen-time sources so time counts once
     │   └── voice.js         LiveKit join tokens (or peer-to-peer fallback)
     ├── public/              dashboard (index.html, styles.css, app.js — plain ES modules)
-    ├── test/run-tests.js    end-to-end API + realtime tests (38 checks, SQLite or Postgres)
+    ├── test/run-tests.js    end-to-end API + realtime tests (39 checks, SQLite or Postgres)
     └── .env.example
 ```
 
@@ -74,6 +76,9 @@ Everything below is functional against the real database, not mocked.
 
 - **Accounts:** signup and login with bcrypt-hashed passwords, 7-day signed sessions, rate-limited auth. Every query filters by the signed-in user, and the test suite checks that one user can't read or delete another's data.
 - **Focus timer:** 15/25/50-minute focus blocks and 5/10/15-minute breaks. The timer survives page reloads, rolls into a break after each completed block, and plays a chime. Giving up wilts the tree but keeps partial points.
+- **Guided breaks:** in break mode, the timer offers box breathing, a 5-step stretch, the 20-20-20 eye rest, or a short move checklist, and remembers your favourite.
+- **Progress page:** a 6-month focus calendar heatmap, focus vs screen time by week (with a table view), your strongest focus hours, which block lengths you actually finish, and your top topics. Hover or tap anything for details.
+- **Installable app:** install Synapse from the browser (desktop "Install app" button, or Add to Home Screen on phones). It opens in its own window and still loads offline. Optional notifications when a focus block or break ends while the tab is in the background.
 - **Gamification:** points (completed focus = minutes + 10, breaks = 5, early stop = half), levels, day streaks, a garden where blocks of 20+ minutes plant a sapling, maple, cedar or oak, and 10 milestones. Points are capped at 400 a day so grinding is never rewarded over rest.
 - **Focus rooms:** live presence (including who is mid-focus and minutes left), persisted chat with flood control, and optional voice. The microphone is requested only when you click "Join voice". Without LiveKit, audio goes peer to peer (up to 6 people) and the server only relays signaling. With LiveKit configured, rooms scale to many people; Synapse only issues 2-hour, microphone-only join tokens.
 - **Community:** mood-tagged check-ins, Cheer / Hug / Same-here reactions, live "new check-ins" notice, delete your own posts, and an option to post anonymously.
@@ -109,6 +114,13 @@ Authorization: Bearer syn_...
 ```
 
 Each upload replaces that device type's earlier totals for those days, so re-sending is safe. `GET /api/device/ping` checks a key.
+
+## Continuous integration
+
+Every push runs `.github/workflows/ci.yml`:
+- the backend suite on SQLite and on PostgreSQL 16, with Node 20, 22 and 24;
+- the desktop tracker tests;
+- a syntax check of the dashboard and extension scripts.
 
 ## About the "AI" claims
 

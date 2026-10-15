@@ -1,0 +1,19 @@
+{
+  "name": "Synapse AI",
+  "short_name": "Synapse",
+  "description": "Focus timer, focus rooms, screen-time reflection and explainable wellbeing insights.",
+  "start_url": "/#/today",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#EEF2F3",
+  "theme_color": "#1C2A33",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Start focusing", "url": "/#/today" },
+    { "name": "Focus rooms", "url": "/#/rooms" }
+  ]
+}
