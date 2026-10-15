@@ -708,12 +708,54 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('GET', '/api/buddies', null, B)).data.buddies.every((x) => !x.sample), 'never without sample data');
   });
 
+  console.log('Phone app: scoped access, badges and levels');
+  await test('phone key reaches only the allowlisted app endpoints', async () => {
+    await api('PUT', '/api/consents', { activity_tracking: true }, B);
+    const k = await api('POST', '/api/devices', { kind: 'phone', name: 'Pixel' }, B);
+    const PK = k.data.token;
+    const dev = (m, u, b) => fetch(base + '/api/device/app' + u, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + PK }, body: b ? JSON.stringify(b) : undefined })
+      .then(async (r) => ({ status: r.status, data: await r.json().catch(() => null) }));
+    const today = new Date().toISOString().slice(0, 10);
+    const t = await dev('POST', '/tasks', { title: 'Phone task', day: today });
+    assert(t.status === 201, JSON.stringify(t));
+    assert((await dev('GET', `/tasks?day=${today}`)).data.some((x) => x.title === 'Phone task'));
+    const s = await fetch(base + '/api/device/sessions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + PK },
+      body: JSON.stringify({ kind: 'focus', plannedMin: 25, actualMin: 25, completed: true, day: today, startedAt: `${today}T06:30`, endedAt: `${today}T06:55`, taskId: t.data.id }) });
+    assert(s.status === 201, 'session ' + s.status + ' ' + await s.text());
+    assert((await dev('GET', `/tasks?day=${today}`)).data.find((x) => x.id === t.data.id).blocksDone === 1, 'phone block counts towards the task');
+    const dd = await dev('POST', '/distractions', { kind: 'phone', at: `${today}T06:40` }); assert(dd.status === 201, 'distraction ' + JSON.stringify(dd));
+    assert((await dev('GET', `/suggest-block?day=${today}&hour=9`)).status === 200, 'suggest');
+    const rv = await dev('GET', `/review?day=${today}`); assert(rv.data.focusMin >= 25, 'review ' + JSON.stringify(rv));
+    const rw = await dev('GET', '/rewards');
+    assert(rw.data.levelTitle && rw.data.milestones.some((m) => m.code === 'early_bird' && m.achievedAt), 'early bird badge from a 6:30 block ' + JSON.stringify(rw).slice(0, 300));
+    assert((await dev('PUT', '/prefs', { dailyGoalMin: 60, leaderboard: true })).data.leaderboard === false, 'phone can only change the goal');
+    for (const [m, u] of [['GET', '/export'], ['DELETE', '/account'], ['GET', '/posts'], ['PUT', '/consents'], ['GET', '/me'], ['DELETE', '/data']])
+      assert((await dev(m, u)).status === 404, `${m} ${u} must not be reachable`);
+    const ext = await api('POST', '/api/devices', { kind: 'extension', name: 'Chrome' }, B);
+    const r = await fetch(base + '/api/device/app/tasks', { headers: { authorization: 'Bearer ' + ext.data.token } });
+    assert(r.status === 403, 'only phone keys');
+  });
+  await test('levels show next to names, never for anonymous posts', async () => {
+    const feed = await api('GET', '/api/posts', null, B);
+    const named = feed.data.posts.find((p) => p.author !== 'Anonymous member');
+    assert(named && named.level && named.level.title && named.level.level >= 1, JSON.stringify(named));
+    await api('PUT', '/api/consents', { community_profile: false }, B);
+    const p = await api('POST', '/api/posts', { mood: 'calm', body: 'anonymous one' }, B);
+    const f2 = await api('GET', '/api/posts', null, A);
+    const anon = f2.data.posts.find((x) => x.id === p.data.id);
+    assert(anon.author === 'Anonymous member' && anon.level === null, 'anonymous posts carry no level');
+    await api('PUT', '/api/consents', { community_profile: true }, B);
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);
-    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 5 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 4 && r.data.dailyLimits.length === 1);
+    const d = r.data;
+    assert(d.account.username === 'alice' && d.focusSessions.length === 5 && d.appUsage.length === 6 && d.connectedDevices.length === 4 && d.dailyLimits.length === 1,
+      JSON.stringify({ s: d.focusSessions.length, u: d.appUsage.length, dev: d.connectedDevices.length, l: d.dailyLimits.length }));
     const rb = await api('GET', '/api/export', null, B);
-    assert(rb.data.focusSessions.length === 0 && rb.data.communityPosts.length === 0);
+    assert(rb.data.account.username === 'bob' && rb.data.focusSessions.length === 1 && !rb.data.focusSessions.some((x) => x.tag === 'Thesis')
+      && !rb.data.communityPosts.some((x) => /Starting a 50|Long day/.test(x.body)), 'no one else\'s data');
   });
   await test('delete usage scope', async () => {
     await api('DELETE', '/api/data', { scope: 'usage' }, A);

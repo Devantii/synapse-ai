@@ -688,3 +688,22 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 .auth-panel { position: relative; }
 .auth-lang { position: absolute; top: 16px; right: 16px; }
 @media (max-width: 760px) { .rail-user .lang { display: none; } }
+
+/* ---------- levels + badges ---------- */
+.lvl { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 7px; border-radius: 99px; font-size: 11px; font-weight: 700; color: var(--lichen); background: var(--lichen-soft); white-space: nowrap; vertical-align: 1px; }
+.lvl-t { font-weight: 600; }
+.people .lvl-t, .msg .lvl-t, .lb .lvl-t { display: none; }
+.who-level a { color: var(--lichen); font-weight: 700; text-decoration: none; font-size: 12px; }
+.level-card { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; margin: 16px 0; }
+.lvl-big { display: flex; align-items: center; gap: 14px; }
+.lvl-num { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font-size: 1.8rem; font-weight: 800; color: #fff; background: var(--lichen); }
+.lvl-big b { display: block; font-size: 1.25rem; }
+.lvl-prog { flex: 1 1 300px; display: grid; gap: 6px; }
+.badges { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.badges li { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: center; padding: 12px 14px; border: 1.5px dashed var(--line); border-radius: var(--r-md); color: var(--ink-3); }
+.badges li.got { border-style: solid; border-color: var(--lichen); background: var(--lichen-soft); color: var(--ink); }
+.badge-icon { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; background: var(--surface); filter: grayscale(1); opacity: .5; }
+.badges li.got .badge-icon { filter: none; opacity: 1; }
+.badges b { display: block; }
+.badges small { display: block; color: inherit; opacity: .85; }
+.badges .when { color: var(--lichen); opacity: 1; font-weight: 600; margin-top: 2px; }

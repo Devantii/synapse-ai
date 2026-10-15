@@ -44,7 +44,7 @@ final class Ui {
 
     TextView text(CharSequence s, float sp, int color, boolean bold) {
         TextView t = new TextView(ctx);
-        t.setText(s);
+        t.setText(s instanceof String ? Tr.t(s) : s);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
         t.setTextColor(color);
         t.setLineSpacing(0, 1.15f);
@@ -83,7 +83,7 @@ final class Ui {
     Button button(String label, int style) {
         // style: 0 = primary (ink), 1 = secondary (outline), 2 = grow (green), 3 = danger
         Button b = new Button(ctx);
-        b.setText(label);
+        b.setText(Tr.t(label));
         b.setAllCaps(false);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));

@@ -66,3 +66,11 @@ The app has no third-party libraries. JUnit is used only for tests.
 - **Settings**: connect by scanning the QR code on Synapse > Privacy > Connect Android phone (or type the address and key); limit alerts at 80%/100%; bedtime nudge; usage access.
 - **Home-screen widget**: today's time, pickups and top app.
 - Syncs about every 15 minutes in the background.
+
+## v3
+
+- **Insights tab:** your level and title, weekly review (focus, days active, screen time, sleep, top distraction, one thing for next week), the 14-day load score with early warning, personal patterns and badges.
+- **Today:** daily focus goal, early warning, and your Synapse tasks (add, tick off).
+- **Focus:** suggested block length, "Focus on a task" (the finished block counts towards it), and **Got distracted?** during a block.
+- **Focus guard (optional, Settings):** during a focus block, opening a social, video or game app, or one with a daily limit, shows "Paused during focus" with the time left. You can go back, use the app for 2 minutes, or end the block. Needs Usage access and **Display over other apps**; it runs as a foreground service only while a focus block runs.
+- **Language:** English or हिन्दी (Settings).

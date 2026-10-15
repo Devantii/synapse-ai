@@ -152,6 +152,7 @@ async function enterApp(isNew) {
   $('#app').hidden = false;
   $('#who').textContent = state.me.user.displayName;
   $('#nav-admin').hidden = !state.me.isAdmin;
+  paintSideLevel();
   connectSocket();
   foreground.sync();
   timer.broadcast(); // re-sync a timer that was running before a reload
@@ -687,6 +688,7 @@ async function renderTodaySide() {
   side.onsubmit = taskSubmit;
   side.onchange = taskChange;
   state.me.rewards = rewards;
+  paintSideLevel();
   const today = sessions.filter((s) => s.day === localDay());
   const focusMin = today.filter((s) => s.kind === 'focus' && s.completed).reduce((a, s) => a + s.actual_min, 0);
   const breaks = today.filter((s) => s.kind === 'break' && s.completed).length;
@@ -732,7 +734,7 @@ async function renderLeaderboard() {
       <p class="muted" style="margin:4px 0 0;font-size:var(--step--1)">Completed focus blocks since Monday. Only people who opt in are listed, by display name.</p></div>
       <label class="switch lb-switch"><strong>Show me</strong><input type="checkbox" id="lb-opt" ${lb.optedIn ? 'checked' : ''} /></label></div>
     ${lb.rows.length ? `<ol class="lb">${lb.rows.map((r) => `<li class="${r.isMe ? 'me' : ''}"><span class="rank num">${r.rank}</span><span class="face">${esc(initials(r.name))}</span>
-        <span class="lb-name">${esc(r.name)}${r.isMe ? ' (you)' : ''}</span><span class="lb-bar"><i style="width:${Math.max(4, Math.round((r.minutes / lb.rows[0].minutes) * 100))}%"></i></span><b class="num">${fmtMin(r.minutes)}</b></li>`).join('')}</ol>`
+        <span class="lb-name">${esc(r.name)}${r.isMe ? ' (you)' : ''} ${levelChip(r.level)}</span><span class="lb-bar"><i style="width:${Math.max(4, Math.round((r.minutes / lb.rows[0].minutes) * 100))}%"></i></span><b class="num">${fmtMin(r.minutes)}</b></li>`).join('')}</ol>`
       : '<p class="empty">Nobody on the board yet this week. Opt in and finish a focus block to be first.</p>'}
     ${myRow ? '' : `<p class="muted" style="font-size:var(--step--1);margin-bottom:0">Your week: <b>${fmtMin(lb.me.minutes)}</b> in ${lb.me.blocks} ${lb.me.blocks === 1 ? 'block' : 'blocks'}${lb.optedIn ? '' : ' (only you can see this)'}.</p>`}`;
   $('#lb-opt').onchange = async (e) => {
@@ -760,6 +762,12 @@ async function loadSuggestion() {
     el.innerHTML = `<span><b>Suggested: ${r.minutes} min.</b> ${esc(r.reason)}</span>${r.minutes !== timer.s.planned ? `<button class="link" data-suggest="${r.minutes}">Use ${r.minutes} min</button>` : ''}`;
     el.hidden = timer.s.running || timer.s.mode !== 'focus';
   } catch { el.hidden = true; }
+}
+
+function paintSideLevel() {
+  const r = state.me?.rewards;
+  const el = $('#who-level');
+  if (el && r) el.innerHTML = `<a href="#/garden">Lv ${r.level} · ${esc(r.levelTitle || '')}</a>`;
 }
 
 // Daily focus goal.
@@ -887,7 +895,7 @@ async function renderRoom(main, roomId) {
     if (!m.isMine && state.me.blockedUserIds?.includes(m.userId)) return; // blocked: never shown
     const mine = m.isMine || m.userId === state.me.user.id;
     const quote = m.reply ? `<button class="quote" data-jump="${m.reply.id}"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</button>` : '';
-    log.insertAdjacentHTML('beforeend', `<div class="msg ${mine ? 'mine' : ''}" data-mid="${m.id}" data-author="${esc(mine ? 'yourself' : m.author)}"><div class="who">${mine ? 'You' : esc(m.author)} · ${ago(m.created_at)}
+    log.insertAdjacentHTML('beforeend', `<div class="msg ${mine ? 'mine' : ''}" data-mid="${m.id}" data-author="${esc(mine ? 'yourself' : m.author)}"><div class="who">${mine ? 'You' : esc(m.author)}${mine ? '' : levelChip(m.level)} · ${ago(m.created_at)}
       <button class="link msg-reply" data-reply="${m.id}">Reply</button>${mine ? '' : modMenu('message', m.id)}</div>${quote}<div class="bubble">${esc(m.body)}</div></div>`);
     log.scrollTop = log.scrollHeight;
   };
@@ -918,7 +926,7 @@ async function renderRoom(main, roomId) {
     lastMembers = members;
     $('#people').innerHTML = members.map((m) => {
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
-      return `<li><span class="face">${esc(initials(m.name))}</span><span><b>${esc(m.name)}${m.socketId === state.socket?.id ? ' (you)' : ''}</b><br>
+      return `<li><span class="face">${esc(initials(m.name))}</span><span><b>${esc(m.name)}${m.socketId === state.socket?.id ? ' (you)' : ''}</b>${levelChip(m.level)}<br>
         <span class="status ${m.focusing ? 'focusing' : ''}">${m.focusing ? `Focusing${mins != null ? `, ${mins} min left` : ''}` : 'Here'}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}${m.audio ? (m.video ? ' · on camera' : ' · in call') + (m.muted ? '' : ' · mic on') : ''}</span></span></li>`;
     }).join('');
     stage.paint(members);
@@ -1504,7 +1512,7 @@ VIEWS.community = async (main) => {
     </div>`;
   const feed = $('#feed');
   const postHtml = (p) => `
-    <li class="post" data-id="${p.id}"><header><b>${esc(p.author)}${p.isMine ? ' (you)' : ''}</b><span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood] || p.mood)}</span><time>${ago(p.created_at)}</time></header>
+    <li class="post" data-id="${p.id}"><header><b>${esc(p.author)}${p.isMine ? ' (you)' : ''}</b>${levelChip(p.level)}<span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood] || p.mood)}</span><time>${ago(p.created_at)}</time></header>
       <p>${esc(p.body)}</p>
       <div class="reacts">${Object.entries(RX).map(([k, label]) => `<button class="react" data-react="${k}" aria-pressed="${p.reactions[k].mine}">${label}${p.reactions[k].count ? ` <span class="num">${p.reactions[k].count}</span>` : ''}</button>`).join('')}
       <button class="react" data-reply-toggle>Reply${p.replies.length ? ` <span class="num">${p.replies.length}</span>` : ''}</button>
@@ -1512,7 +1520,7 @@ VIEWS.community = async (main) => {
       <div class="replies" ${p.replies.length ? '' : 'hidden'}>${p.replies.map(replyHtml).join('')}</div>
       <form class="reply-form" hidden><label class="sr" style="position:absolute;left:-999px">Reply</label>
         <input name="body" maxlength="400" autocomplete="off" placeholder="Write a kind reply" required /><button class="btn primary">Reply</button></form></li>`;
-  const replyHtml = (r) => `<div class="reply" data-rid="${r.id}"><b>${esc(r.author)}${r.isMine ? ' (you)' : ''}</b> <time>${ago(r.created_at)}</time>
+  const replyHtml = (r) => `<div class="reply" data-rid="${r.id}"><b>${esc(r.author)}${r.isMine ? ' (you)' : ''}</b>${levelChip(r.level)} <time>${ago(r.created_at)}</time>
       ${r.isMine ? '<button class="link" data-reply-delete>Delete</button>' : modMenu('reply', r.id)}<p>${esc(r.body)}</p></div>`;
   async function load(reset) {
     const r = await api('GET', `/posts?limit=15${!reset && oldest ? `&before=${oldest}` : ''}`);
@@ -2246,16 +2254,28 @@ VIEWS.garden = async (main) => {
   const r = await api('GET', '/rewards');
   const got = r.milestones.filter((m) => m.achievedAt).length;
   main.innerHTML = `
-    <div class="page-head"><div><h1>Your garden</h1><p>Every completed focus block of 20 minutes or more plants a tree. Longer blocks grow bigger species.</p></div>
-      <div class="muted num">Level ${r.level} · ${r.points} points · best streak ${r.bestStreak} days</div></div>
+    <div class="page-head"><div><h1>Garden and badges</h1><p>Every completed focus block of 20 minutes or more plants a tree. Longer blocks grow bigger species. Badges reward healthy habits, not hours of screen time.</p></div>
+      <div class="muted num">${r.trees} ${r.trees === 1 ? 'tree' : 'trees'} · best streak ${r.bestStreak} ${r.bestStreak === 1 ? 'day' : 'days'}</div></div>
     <section class="panel">
       ${r.garden.length ? `<div class="garden">${r.garden.map((t) => `<figure><svg viewBox="0 0 200 200" role="img" aria-label="${t.species}"><use href="#tree-${t.species}"/></svg><figcaption>${new Date(t.planted_at.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</figcaption></figure>`).join('')}</div>`
         : `<p class="empty">Your garden is empty. Finish a 25-minute focus block on the <a href="#/today">Today</a> page to plant your first sapling.</p>`}
       <p class="muted" style="font-size:var(--step--1);margin:12px 0 0">Sapling under 30 min · maple 30+ · cedar 40+ · oak 50+. Points are capped at ${r.dailyPointCap} a day so resting never costs you.</p>
     </section>
-    <section class="panel"><h2 style="font-size:var(--step-1)">Milestones <span class="muted num" style="font-weight:400">${got} of ${r.milestones.length}</span></h2>
-      <ul class="milestones">${r.milestones.map((m) => `<li class="${m.achievedAt ? 'got' : ''}"><b>${esc(m.title)}</b><small>${esc(m.desc)}</small></li>`).join('')}</ul></section>`;
+    <section class="panel level-card">
+      <div class="lvl-big"><span class="lvl-num num">${r.level}</span><div><b>${esc(r.levelTitle)}</b><small>Level ${r.level}</small></div></div>
+      <div class="lvl-prog"><div style="display:flex;justify-content:space-between;font-size:var(--step--1)"><span>${r.points} points</span><span class="muted">${r.nextLevelAt - r.points} to Level ${r.level + 1} · ${esc(r.nextLevelTitle)}</span></div>
+        <div class="level-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></div>
+        <small class="muted">Your level and title show next to your name in the community and rooms (not on anonymous posts).</small></div>
+    </section>
+    <section class="panel"><h2 style="font-size:var(--step-1)">Badges <span class="muted num" style="font-weight:400">${got} of ${r.milestones.length}</span></h2>
+      <ul class="badges">${r.milestones.map((m) => `<li class="${m.achievedAt ? 'got' : ''}"><span class="badge-icon" aria-hidden="true">${BADGE_ICON[m.code] || '★'}</span>
+        <div><b>${esc(m.title)}</b><small>${esc(m.desc)}</small>${m.achievedAt ? `<small class="when">Earned ${ago(m.achievedAt)}</small>` : ''}</div></li>`).join('')}</ul></section>`;
 };
+
+const BADGE_ICON = { first_focus: '🌱', first_break: '☕', trees_5: '🌳', trees_25: '🌲', trees_100: '🏞️', streak_3: '🔥', streak_7: '📅', streak_30: '🌿',
+  level_5: '🪴', level_10: '🌍', balanced_day: '⚖️', first_post: '💬', usage_logged: '🪞', early_bird: '🌅', tasks_10: '✅', distraction_aware: '🧭',
+  room_hour: '👥', room_10h: '🏠', first_reply: '🤝', cheer_5: '📣', buddy: '🫶', goal_met: '🎯' };
+const levelChip = (lv) => (lv ? `<span class="lvl" title="Level ${lv.level} · ${esc(lv.title)} · ${lv.badges} ${lv.badges === 1 ? 'badge' : 'badges'}">Lv ${lv.level}<span class="lvl-t">· ${esc(lv.title)}</span></span>` : '');
 
 // ---------------------------------------------------------------- Privacy
 VIEWS.privacy = async (main) => {

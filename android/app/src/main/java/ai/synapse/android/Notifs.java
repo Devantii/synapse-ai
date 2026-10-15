@@ -76,6 +76,11 @@ final class Notifs {
 
     /** Ongoing countdown while a block runs. */
     static void focusRunning(Context c, PhoneLogic.Timer t) {
+        post(c, ID_FOCUS, focusNotification(c, t));
+    }
+
+    static Notification focusNotification(Context c, PhoneLogic.Timer t) {
+        ensureChannels(c);
         boolean focus = "focus".equals(t.mode);
         String title = focus ? "Focusing" + (t.tag.isEmpty() ? "" : ": " + t.tag) : "Break";
         String text = focus ? "Distracting sites are paused on your connected browser too." : "Stretch, breathe, look away from screens.";
@@ -89,7 +94,7 @@ final class Notifs {
                 .setOnlyAlertOnce(true)
                 .setContentIntent(openApp(c, "focus"))
                 .build();
-        post(c, ID_FOCUS, n);
+        return n;
     }
 
     static void cancelFocus(Context c) {

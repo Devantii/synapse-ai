@@ -229,10 +229,6 @@ get('/consents/log', async (req, res) =>
 // ---------- focus sessions ----------
 post('/sessions', requireConsent('activity_tracking', 'Save focus activity'), async (req, res) => {
   const result = await sessions.record(req.user.id, req.body);
-  // A completed focus block linked to a task counts towards it.
-  const taskId = Number.isInteger(req.body.taskId) ? req.body.taskId : null;
-  if (taskId && req.body.kind === 'focus' && req.body.completed === true)
-    await db.run('UPDATE tasks SET blocks_done = blocks_done + 1 WHERE id = ? AND user_id = ?', [taskId, req.user.id]);
   res.status(201).json({ ...result, rewards: await game.summary(req.user.id) });
 });
 
@@ -491,11 +487,12 @@ async function feed(userId, limit, beforeId) {
     )
     : [];
   const replies = ids.length ? await repliesFor(userId, ids) : [];
+  const lv = await game.publicLevels(rows.filter((r) => r.author !== 'Anonymous member').map((r) => r.user_id));
   return rows.map((p) => {
     const reactions = Object.fromEntries(REACTIONS.map((k) => [k, { count: 0, mine: false }]));
     for (const r of rx) if (r.post_id === p.id) reactions[r.kind] = { count: r.n, mine: !!r.mine };
     const { user_id, ...rest } = p;
-    return { ...rest, isMine: user_id === userId, reactions, replies: replies.filter((r) => r.post_id === p.id).map(({ post_id, ...r }) => r) };
+    return { ...rest, isMine: user_id === userId, reactions, level: lv[user_id] || null, replies: replies.filter((r) => r.post_id === p.id).map(({ post_id, ...r }) => r) };
   });
 }
 
@@ -507,7 +504,8 @@ async function repliesFor(userId, postIds) {
       WHERE r.post_id IN (${postIds.map(() => '?').join(',')}) AND ${safety.visible('r', 'reply', userId).sql} ORDER BY r.id`,
     [...postIds, ...safety.visible('r', 'reply', userId).params]
   );
-  return rows.map(({ user_id, ...r }) => ({ ...r, isMine: user_id === userId }));
+  const lv = await game.publicLevels(rows.filter((r) => r.author !== 'Anonymous member').map((r) => r.user_id));
+  return rows.map(({ user_id, ...r }) => ({ ...r, isMine: user_id === userId, level: lv[user_id] || null }));
 }
 
 get('/posts', async (req, res) => {
@@ -580,7 +578,9 @@ get('/rooms/:id/messages', async (req, res) => {
       WHERE m.room_id = ? AND ${safety.visible('m', 'message', req.user.id).sql} ORDER BY m.id DESC LIMIT 50`,
     [req.user.id, String(req.params.id), ...safety.visible('m', 'message', req.user.id).params]
   );
+  const lv = await game.publicLevels(rows.map((r) => r.userId));
   res.json(rows.reverse().map(({ replyId, replyAuthor, replyBody, ...m }) => ({
+    level: lv[m.userId] || null,
     ...m, reply: replyId ? { id: replyId, author: replyAuthor || 'Deleted message', body: replyBody ? String(replyBody).slice(0, 140) : '' } : null })));
 });
 
@@ -724,7 +724,8 @@ get('/leaderboard', async (req, res) => {
   res.json({
     from, to, optedIn: (await prefs(req.user.id)).leaderboard,
     me: { minutes: Number(mine.minutes) || 0, blocks: Number(mine.blocks) || 0 },
-    rows: rows.map((r, i) => ({ rank: i + 1, name: r.name, minutes: Math.round(Number(r.minutes)), blocks: Number(r.blocks), isMe: r.id === req.user.id })),
+    rows: await (async () => { const lv = await game.publicLevels(rows.map((r) => r.id));
+      return rows.map((r, i) => ({ rank: i + 1, name: r.name, minutes: Math.round(Number(r.minutes)), blocks: Number(r.blocks), isMe: r.id === req.user.id, level: lv[r.id] || null })); })(),
   });
 });
 

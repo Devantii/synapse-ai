@@ -1,5 +1,6 @@
 // Socket.IO: room presence, persisted room chat, focus status, and WebRTC signaling for the small peer-to-peer video/voice call.
 const db = require('./db');
+const game = require('./gamification');
 const { verify } = require('./auth');
 
 const MIN_VISIT_S = Number(process.env.ROOM_MIN_VISIT_S ?? 30); // shorter visits aren't counted as time in a room
@@ -17,7 +18,7 @@ function roomTimer(roomId) {
 function roomMembers(roomId) {
   return [...members.entries()]
     .filter(([, m]) => m.roomId === roomId)
-    .map(([socketId, m]) => ({ socketId, userId: m.userId, name: m.name, focusing: m.focusing, focusEndsAt: m.focusEndsAt, audio: m.audio, muted: m.muted, video: !!m.video, joinedAt: m.joinedAt }));
+    .map(([socketId, m]) => ({ socketId, userId: m.userId, name: m.name, focusing: m.focusing, focusEndsAt: m.focusEndsAt, audio: m.audio, muted: m.muted, video: !!m.video, joinedAt: m.joinedAt, level: m.level || null }));
 }
 
 function attach(io) {
@@ -82,6 +83,7 @@ function attach(io) {
       const keep = rejoin ? { joinedAt: m.joinedAt, joinDay: m.joinDay } : null;
       if (!rejoin) leave(socket);
       m.roomId = roomId;
+      m.level = (await game.publicLevels([m.userId]).catch(() => ({})))[m.userId] || null;
       m.joinedAt = keep?.joinedAt || Date.now();
       m.joinDay = keep?.joinDay || (/^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) ? String(day) : new Date().toISOString().slice(0, 10));
       socket.join(roomId);
@@ -145,7 +147,7 @@ function attach(io) {
         console.error('[rooms] message save failed:', e.message);
         return ack?.({ error: 'Message not sent. Try again.' });
       }
-      const msg = { id, body: text, author: m.name, userId: m.userId, created_at: new Date().toISOString().replace('T', ' ').slice(0, 19), reply };
+      const msg = { id, body: text, author: m.name, userId: m.userId, created_at: new Date().toISOString().replace('T', ' ').slice(0, 19), reply, level: m.level || null };
       io.to(roomId).emit('room:message', msg);
       ack?.({ ok: true });
     });

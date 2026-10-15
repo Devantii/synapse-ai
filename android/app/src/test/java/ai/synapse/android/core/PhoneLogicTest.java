@@ -135,4 +135,40 @@ public class PhoneLogicTest {
         }
         assertTrue(threw);
     }
+
+    @Test
+    public void withTaskAddsTheTaskId() {
+        assertEquals("{\"kind\":\"focus\",\"taskId\":7}", PhoneLogic.withTask("{\"kind\":\"focus\"}", 7));
+        assertEquals("{\"kind\":\"focus\"}", PhoneLogic.withTask("{\"kind\":\"focus\"}", 0));
+    }
+
+    @Test
+    public void distractingCategories() {
+        assertTrue(PhoneLogic.isDistracting("social"));
+        assertTrue(PhoneLogic.isDistracting("games"));
+        assertFalse(PhoneLogic.isDistracting("work"));
+        assertFalse(PhoneLogic.isDistracting("communication"));
+        assertFalse(PhoneLogic.isDistracting(null));
+    }
+
+    @Test
+    public void foregroundFollowsResumeAndPause() {
+        java.util.List<UsageAggregator.Event> ev = new java.util.ArrayList<>();
+        ev.add(new UsageAggregator.Event(1, "com.whatsapp", UsageAggregator.ACTIVITY_RESUMED));
+        ev.add(new UsageAggregator.Event(2, "com.whatsapp", UsageAggregator.ACTIVITY_PAUSED));
+        ev.add(new UsageAggregator.Event(3, "com.instagram.android", UsageAggregator.ACTIVITY_RESUMED));
+        assertEquals("com.instagram.android", PhoneLogic.foreground(ev));
+        ev.add(new UsageAggregator.Event(4, "com.instagram.android", UsageAggregator.ACTIVITY_PAUSED));
+        assertNull(PhoneLogic.foreground(ev));
+        ev.add(new UsageAggregator.Event(5, "com.youtube", UsageAggregator.ACTIVITY_RESUMED));
+        ev.add(new UsageAggregator.Event(6, "", UsageAggregator.SCREEN_NON_INTERACTIVE));
+        assertNull(PhoneLogic.foreground(ev));
+    }
+
+    @Test
+    public void mmssRoundsUp() {
+        assertEquals("18:20", PhoneLogic.mmss(1100000));
+        assertEquals("0:01", PhoneLogic.mmss(1));
+        assertEquals("0:00", PhoneLogic.mmss(-5));
+    }
 }

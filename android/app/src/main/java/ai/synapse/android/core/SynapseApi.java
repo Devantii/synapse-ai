@@ -97,6 +97,11 @@ public final class SynapseApi {
         return MiniJson.obj(parse(request("POST", "/api/device/sessions", json)));
     }
 
+    /** Calls one of the dashboard endpoints the phone may use (tasks, insights, rewards...): /api/device/app + path. */
+    public Object app(String method, String path, String json) throws ApiException {
+        return parse(request(method, "/api/device/app" + path, json));
+    }
+
     private static Object parse(String body) throws ApiException {
         try {
             return MiniJson.parse(body);
