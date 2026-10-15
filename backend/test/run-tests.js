@@ -280,6 +280,19 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('GET', '/api/device/focus', null, devToken)).data.focusing === false);
     assert((await api('PUT', '/api/focus/state', { mode: 'focus', endsAt: Date.now() + 10 * 3600000 }, A)).status === 400);
   });
+  await test('phone key: Android usage adds to computer time', async () => {
+    const k = await api('POST', '/api/devices', { kind: 'phone', name: 'Pixel 8' }, A);
+    assert(k.status === 201, JSON.stringify(k.data));
+    const r = await api('PUT', '/api/device/usage', { days: [{ day: today, entries: [{ app: 'Instagram', category: 'social', minutes: 40 }] }] }, k.data.token);
+    assert(r.status === 200, JSON.stringify(r.data));
+    const u = await api('GET', '/api/usage?days=1', null, A);
+    const insta = u.data.entries.filter((e) => /instagram/i.test(e.app));
+    // typed 180 < extension 210 + phone 40, so extension and phone both count (250)
+    assert(insta.find((e) => e.source === 'phone').counted && insta.find((e) => e.source === 'extension').counted, JSON.stringify(insta));
+    assert(insta.find((e) => e.source === 'phone').sourceLabel === 'Android phone');
+    await api('DELETE', '/api/devices/' + k.data.id, null, A);
+    await api('DELETE', '/api/usage/' + insta.find((e) => e.source === 'phone').id, null, A);
+  });
   await test('voice endpoint falls back to mesh without LiveKit', async () => {
     const r = await api('GET', '/api/rooms/deep-work/voice', null, A);
     assert(r.data.mode === 'mesh');
@@ -323,7 +336,7 @@ const ts = (day, hh) => `${day}T${hh}:00`;
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);
-    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 3 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 2 && r.data.dailyLimits.length === 1);
+    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 3 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 3 && r.data.dailyLimits.length === 1);
     const rb = await api('GET', '/api/export', null, B);
     assert(rb.data.focusSessions.length === 0 && rb.data.communityPosts.length === 0);
   });

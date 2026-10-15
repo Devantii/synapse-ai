@@ -1,0 +1,59 @@
+# Synapse for Android
+
+Measures how long each app is open on your phone and adds the daily totals to your Synapse account, next to your browser and computer time. Android 8.0 or newer.
+
+## Install
+
+1. On your phone, open https://github.com/Devantii/synapse-ai/releases/tag/android-latest and download **synapse-android.apk**.
+2. Open the file. Android asks to allow installing from your browser or Files app; allow it for this install.
+3. Open **Synapse** and tap **Allow usage access**. Find Synapse in the list and switch it on, then go back.
+4. In Synapse on the web, open **Privacy → Connect Android phone** and copy the key. In the app, enter your server address (for example `https://synapse-ai-xxxx.onrender.com`) and the key, then tap **Connect**.
+
+It syncs right away, then about every 30 minutes when the phone has internet, including after a restart.
+
+Every push to `main` rebuilds the APK automatically (see the **Android app** job in GitHub Actions). It's a debug build signed with a development key: fine for installing directly, not for the Play Store.
+
+## What it measures
+
+The app reads Android's own app usage log, the same data Digital Wellbeing uses:
+
+- **Counted:** time from when an app comes to the front until you leave it, the screen turns off, or the phone locks.
+- **Split:** time is divided at midnight.
+- **Capped:** one unbroken stretch counts at most 3 hours, in case Android misses a "closed" event.
+- **Not counted:** home screens, the system UI and the Synapse app itself.
+- **Categories:** well-known apps (Instagram, WhatsApp, YouTube…) have fixed categories; everything else uses the app's Play Store category.
+
+Apps are reported by name. That way "Instagram" on the phone and "instagram.com" in the browser line up in Synapse, and phone time is **added** to computer time.
+
+## Privacy
+
+| | |
+|---|---|
+| **Read** | Which app was in front and for how long. |
+| **Never read** | What you do inside apps, messages, notifications, photos, location, contacts. |
+| **Sent** | Per-app minutes for the last 7 days, using a device key that can only upload screen time. Revoke it in Synapse > Privacy any time. |
+| **Permissions** | Usage access (you grant it in Settings), internet, and "run at startup" so the 30-minute sync survives restarts. |
+
+## Build it yourself
+
+Open the `android` folder in Android Studio and press Run, or from a terminal:
+
+```
+cd android
+./gradlew assembleDebug        # APK in app/build/outputs/apk/debug/
+./gradlew testDebugUnitTest    # core logic tests
+```
+
+## Code layout
+
+| Path | What |
+|---|---|
+| `core/UsageAggregator.java` | Turns usage events into minutes per app per day (pure Java, unit-tested). |
+| `core/Payload.java` | Builds the upload JSON; merges apps with the same name; drops tiny amounts. |
+| `core/AppCategories.java` | App → Synapse category. |
+| `core/SynapseApi.java` | Device-key API client (plain `java.net`). |
+| `UsageReader.java` | Reads Android's usage events and app names. |
+| `SyncJobService.java` | Background sync every ~30 minutes (JobScheduler). |
+| `MainActivity.java` | The single screen. |
+
+The app has no third-party libraries. JUnit is used only for tests.

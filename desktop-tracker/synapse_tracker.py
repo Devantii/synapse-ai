@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Synapse desktop tracker for Windows.
+Synapse desktop tracker for Windows and macOS.
 
 Measures how long each desktop app is in the foreground while you are active, and syncs daily
 totals to your Synapse AI account using a revocable device key. Standard library only.
@@ -11,12 +11,13 @@ Browsers are skipped by default because the Synapse browser extension measures w
 
 Usage:
     python synapse_tracker.py setup              connect to your Synapse server (asks for address + key)
-    python synapse_tracker.py run                start tracking (keep running; use pythonw to hide the window)
+    python synapse_tracker.py run                start tracking (keep running; on Windows use pythonw to hide the window)
     python synapse_tracker.py status             show today's totals and the last sync
     python synapse_tracker.py sync               upload now
-    python synapse_tracker.py install-startup    start silently when you sign in to Windows
+    python synapse_tracker.py install-startup    start automatically when you sign in (Windows or Mac)
     python synapse_tracker.py uninstall-startup  stop starting automatically
     python synapse_tracker.py clear              delete totals stored on this computer
+On a Mac, use python3 instead of python.
 """
 from __future__ import annotations
 
@@ -76,9 +77,28 @@ CATEGORIES = {
     "entertainment": {"Spotify", "VLC", "Netflix"},
     "games": {"Steam"},
 }
+# macOS: apps are identified by their display name (from lsappinfo), not an .exe.
+MAC_BROWSERS = {"Safari", "Google Chrome", "Firefox", "Microsoft Edge", "Brave Browser", "Arc", "Opera", "Vivaldi", "Chromium", "Orion", "Zen", "Zen Browser", "DuckDuckGo"}
+MAC_IGNORED = {"loginwindow", "ScreenSaverEngine", "Dock", "SystemUIServer", "Spotlight", "Control Center", "ControlCenter",
+               "Notification Center", "NotificationCenter", "WindowManager", "universalAccessAuthWarn", "SecurityAgent", "CoreServicesUIAgent"}
+MAC_FRIENDLY = {
+    "Code": "VS Code", "Visual Studio Code": "VS Code", "Cursor": "Cursor", "iTerm2": "Terminal", "Terminal": "Terminal",
+    "Microsoft Word": "Word", "Microsoft Excel": "Excel", "Microsoft PowerPoint": "PowerPoint", "Microsoft Outlook": "Outlook",
+    "Microsoft OneNote": "OneNote", "Microsoft Teams": "Teams", "Microsoft Teams (work or school)": "Teams", "Microsoft Teams classic": "Teams",
+    "zoom.us": "Zoom", "WhatsApp": "WhatsApp", "Telegram": "Telegram", "Slack": "Slack", "Discord": "Discord", "Spotify": "Spotify",
+    "Google Chrome": "Chrome", "Microsoft Edge": "Edge", "Brave Browser": "Brave", "System Settings": "Settings", "System Preferences": "Settings",
+}
+CATEGORIES["work"] |= {"Cursor", "Xcode", "Pages", "Numbers", "Keynote", "Android Studio", "Sublime Text", "TablePlus", "Linear"}
+CATEGORIES["study"] |= {"Preview", "Books", "Notes"}
+CATEGORIES["communication"] |= {"Mail", "Messages", "FaceTime"}
+CATEGORIES["entertainment"] |= {"Music", "TV", "Podcasts", "IINA", "QuickTime Player"}
+
 VALID_CATEGORIES = {"work", "study", "social", "entertainment", "games", "news", "communication", "other"}
 
-APP_DIR = Path(os.environ.get("APPDATA") or Path.home() / ".config") / "SynapseTracker"
+if sys.platform == "darwin":
+    APP_DIR = Path.home() / "Library" / "Application Support" / "SynapseTracker"
+else:
+    APP_DIR = Path(os.environ.get("APPDATA") or Path.home() / ".config") / "SynapseTracker"
 CONFIG_PATH = APP_DIR / "config.json"
 TOTALS_PATH = APP_DIR / "totals.json"
 STATE_PATH = APP_DIR / "state.json"
@@ -209,6 +229,55 @@ class WindowsPlatform:
         return exe
 
 
+# --------------------------------------------------------------------------- macOS
+class MacPlatform:
+    """Foreground app via `lsappinfo` and idle time via `ioreg`, both built into macOS.
+    Needs no extra packages and no Accessibility or Screen Recording permission."""
+
+    def __init__(self, run=None):
+        import subprocess
+
+        def default_run(args):
+            return subprocess.run(args, capture_output=True, text=True, timeout=3).stdout
+
+        self.run = run or default_run
+
+    @staticmethod
+    def parse_front_asn(out: str) -> str | None:
+        out = (out or "").strip()
+        return out if out.startswith("ASN:") else None
+
+    @staticmethod
+    def parse_display_name(out: str) -> str | None:
+        import re
+        m = re.search(r'"(?:LSDisplayName|name)"\s*=\s*"((?:[^"\\]|\\.)*)"', out or "")
+        return m.group(1).replace('\\"', '"') if m else None
+
+    @staticmethod
+    def parse_idle_ns(out: str) -> float:
+        import re
+        m = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', out or "")
+        return int(m.group(1)) / 1e9 if m else 0.0
+
+    def idle_seconds(self) -> float:
+        return self.parse_idle_ns(self.run(["ioreg", "-c", "IOHIDSystem", "-d", "4"]))
+
+    def foreground_exe(self) -> str | None:
+        asn = self.parse_front_asn(self.run(["lsappinfo", "front"]))
+        if not asn:
+            return None
+        name = self.parse_display_name(self.run(["lsappinfo", "info", "-only", "name", asn]))
+        return f"mac:{name}" if name else None
+
+
+def pick_platform():
+    if os.name == "nt":
+        return WindowsPlatform()
+    if sys.platform == "darwin":
+        return MacPlatform()
+    return None
+
+
 # --------------------------------------------------------------------------- tracker
 class Tracker:
     def __init__(self, platform, config: dict, clock=time.time):
@@ -229,13 +298,19 @@ class Tracker:
         exe = self.platform.foreground_exe()
         if not exe:
             return None
+        excluded = {a.lower() for a in self.config.get("excluded_apps", [])}
+        if exe.startswith("mac:"):
+            name = exe[4:]
+            if name in MAC_IGNORED or (self.config["ignore_browsers"] and name in MAC_BROWSERS):
+                return None
+            app = MAC_FRIENDLY.get(name, name)
+            return None if (app.lower() in excluded or name.lower() in excluded) else app
         base = ntpath.basename(exe).lower()
         if base in IGNORED or base.endswith(".scr"):
             return None
         if self.config["ignore_browsers"] and base in BROWSERS:
             return None
         app = friendly_name(exe)
-        excluded = {a.lower() for a in self.config.get("excluded_apps", [])}
         if app.lower() in excluded or base in excluded or base.removesuffix(".exe") in excluded:
             return None
         return app
@@ -398,8 +473,12 @@ def cmd_setup(_args) -> int:
     print(f"\nConnected as {info['user']} ({info['device']}).")
     if not info.get("usageConsent"):
         print('Turn on "Save screen-time data" in Synapse > Privacy, or uploads will be refused.')
-    print("Start tracking with:  pythonw synapse_tracker.py run")
-    print("Start automatically:  python synapse_tracker.py install-startup")
+    if sys.platform == "darwin":
+        print("Start tracking with:  python3 synapse_tracker.py run")
+        print("Start automatically:  python3 synapse_tracker.py install-startup")
+    else:
+        print("Start tracking with:  pythonw synapse_tracker.py run")
+        print("Start automatically:  python synapse_tracker.py install-startup")
     return 0
 
 
@@ -412,8 +491,9 @@ def setup_logging(to_console: bool) -> None:
 
 
 def cmd_run(_args) -> int:
-    if os.name != "nt":
-        print("The desktop tracker currently supports Windows only.")
+    platform = pick_platform()
+    if platform is None:
+        print("The desktop tracker supports Windows and macOS.")
         return 1
     setup_logging(to_console=sys.stdout is not None and sys.stdout.isatty())
     lock = acquire_lock()
@@ -422,9 +502,15 @@ def cmd_run(_args) -> int:
         return 0
     cfg = load_config()
     if not cfg["server"] or not cfg["key"]:
-        print("Not connected yet. Run:  python synapse_tracker.py setup")
+        print(f"Not connected yet. Run:  {'python3' if sys.platform == 'darwin' else 'python'} synapse_tracker.py setup")
         log.warning("not configured; tracking locally only")
-    Tracker(WindowsPlatform(), cfg).run()
+    if sys.platform == "darwin":
+        try:
+            platform.foreground_exe()
+        except FileNotFoundError:
+            print("Couldn't run lsappinfo. This macOS version may not include it.")
+            return 1
+    Tracker(platform, cfg).run()
     return 0
 
 
@@ -457,14 +543,50 @@ def startup_script() -> Path:
     return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "SynapseTracker.vbs"
 
 
+MAC_AGENT_LABEL = "ai.synapse.tracker"
+
+
+def mac_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{MAC_AGENT_LABEL}.plist"
+
+
+def mac_agent_plist(python: str, script: str) -> str:
+    """LaunchAgent: start at login, restart if it crashes, no window."""
+    import plistlib
+    return plistlib.dumps({
+        "Label": MAC_AGENT_LABEL,
+        "ProgramArguments": [python, script, "run"],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ProcessType": "Background",
+        "StandardOutPath": str(APP_DIR / "launchd.log"),
+        "StandardErrorPath": str(APP_DIR / "launchd.log"),
+    }).decode()
+
+
 def cmd_install_startup(_args) -> int:
+    script = Path(__file__).resolve()
+    if sys.platform == "darwin":
+        import subprocess
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        path = mac_agent_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(mac_agent_plist(sys.executable, str(script)), encoding="utf-8")
+        domain = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootout", domain, str(path)], capture_output=True)  # reload if already installed
+        r = subprocess.run(["launchctl", "bootstrap", domain, str(path)], capture_output=True, text=True)
+        if r.returncode != 0:
+            r = subprocess.run(["launchctl", "load", "-w", str(path)], capture_output=True, text=True)
+        print(f"Installed. The tracker starts when you log in, and is running now.\n  {path}")
+        if r.returncode != 0:
+            print(f"launchctl reported: {(r.stderr or r.stdout).strip()}  (it will still start at next login)")
+        return 0
     if os.name != "nt":
-        print("Windows only.")
+        print("Automatic start is supported on Windows and macOS.")
         return 1
     pyw = Path(sys.executable).with_name("pythonw.exe")
     if not pyw.exists():
         pyw = Path(sys.executable)
-    script = Path(__file__).resolve()
     # Run hidden (window style 0) so no console appears at sign-in.
     startup_script().write_text(f'CreateObject("WScript.Shell").Run """{pyw}"" ""{script}"" run", 0, False\r\n', encoding="utf-8")
     print(f"Installed. The tracker will start silently when you sign in.\n  {startup_script()}")
@@ -473,6 +595,17 @@ def cmd_install_startup(_args) -> int:
 
 
 def cmd_uninstall_startup(_args) -> int:
+    if sys.platform == "darwin":
+        import subprocess
+        path = mac_agent_path()
+        if not path.exists():
+            print("It wasn't set to start automatically.")
+            return 0
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)], capture_output=True)
+        subprocess.run(["launchctl", "unload", "-w", str(path)], capture_output=True)
+        path.unlink()
+        print("Removed from login items and stopped.")
+        return 0
     try:
         startup_script().unlink()
         print("Removed from startup. If it's running now, end pythonw.exe in Task Manager.")

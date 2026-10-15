@@ -134,12 +134,12 @@ CREATE TABLE IF NOT EXISTS reactions (
   PRIMARY KEY (post_id, user_id, kind)
 );
 
--- Revocable keys for the browser extension and desktop tracker. Only a SHA-256 hash is stored.
+-- Revocable keys for the browser extension, desktop tracker and Android app. Only a SHA-256 hash is stored.
 CREATE TABLE IF NOT EXISTS device_tokens (
   id           ${T.ID},
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name         TEXT NOT NULL,
-  kind         TEXT NOT NULL CHECK (kind IN ('extension','desktop')),
+  kind         TEXT NOT NULL CHECK (kind IN ('extension','desktop','phone')),
   token_hash   TEXT NOT NULL UNIQUE,
   prefix       TEXT NOT NULL,
   created_at   TEXT NOT NULL DEFAULT ${T.NOW},
@@ -267,11 +267,34 @@ function postgresDriver() {
 
 const driver = dialect === 'postgres' ? postgresDriver() : sqliteDriver();
 
+// Upgrades for databases created by older versions. Each step is idempotent.
+async function migrate() {
+  // v1.3: device_tokens.kind also allows 'phone' (Android app).
+  if (dialect === 'postgres') {
+    await driver.exec(`ALTER TABLE device_tokens DROP CONSTRAINT IF EXISTS device_tokens_kind_check;
+      ALTER TABLE device_tokens ADD CONSTRAINT device_tokens_kind_check CHECK (kind IN ('extension','desktop','phone'))`);
+  } else {
+    const row = await driver.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'device_tokens'");
+    if (row && !row.sql.includes("'phone'")) {
+      // SQLite can't alter a CHECK constraint, so rebuild the table with the same rows.
+      await driver.tx(async (t) => {
+        const newSql = row.sql.replace("CHECK (kind IN ('extension','desktop'))", "CHECK (kind IN ('extension','desktop','phone'))")
+          .replace(/CREATE TABLE (IF NOT EXISTS )?"?device_tokens"?/, 'CREATE TABLE device_tokens_v2');
+        await t.run(newSql);
+        await t.run('INSERT INTO device_tokens_v2 SELECT * FROM device_tokens');
+        await t.run('DROP TABLE device_tokens');
+        await t.run('ALTER TABLE device_tokens_v2 RENAME TO device_tokens');
+      });
+    }
+  }
+}
+
 let readyPromise;
 /** Create tables and seed rooms. Safe to call repeatedly. */
 function init() {
   readyPromise ??= (async () => {
     await driver.exec(SCHEMA);
+    await migrate();
     for (const r of ROOMS) await driver.run('INSERT INTO rooms (id, name, description) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING', r);
   })();
   return readyPromise;

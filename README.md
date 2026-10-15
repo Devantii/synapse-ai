@@ -9,7 +9,8 @@ One Node.js server (Express + Socket.IO, with PostgreSQL or SQLite) serves both 
 ```
 synapse-ai/
 ├── extension/           Chrome/Edge extension: automatic per-website time      → extension/README.md
-├── desktop-tracker/     Windows tracker: automatic per-app time (Python, stdlib) → desktop-tracker/README.md
+├── desktop-tracker/     Windows + macOS tracker: automatic per-app time (Python, stdlib) → desktop-tracker/README.md
+├── android/             Android app: automatic per-app phone time (Java, no libraries) → android/README.md
 ├── infra/livekit/       optional media server for large voice rooms             → infra/livekit/README.md
 └── backend/
     ├── src/
@@ -85,7 +86,7 @@ Everything below is functional against the real database, not mocked.
 - **Screen time:** enter daily totals per app or site with categories, edit any day in the last 90, delete entries, and see a 14-day stacked chart. The dashboard also measures its own foreground time (only while the tab is visible and focused).
 - **Daily limits:** set minutes per app or site on the Screen time page; progress counts all sources. With the extension, you get a notification at 80% and the site pauses at 100% until midnight, with a 5-minute escape hatch.
 - **Focus mode site pausing:** while a focus block runs, the extension pauses distracting sites (social, video, games by default) with a 5-minute escape hatch, and reopens them when the block ends.
-- **Automatic tracking:** the browser extension measures per-site time and the Windows tracker measures per-app time. Both count only while you're active. Each connects with a revocable device key created in Privacy; a key can only upload screen time, never read data. Each row shows where it came from. If the same app arrives from two sources (typed "Instagram" and tracked "instagram.com"), only the larger value counts.
+- **Automatic tracking:** the browser extension measures per-site time, the desktop tracker (Windows and Mac) measures per-app time, and the Android app measures per-app phone time. Phone time adds to computer time. All count only while you're active. Each connects with a revocable device key created in Privacy; a key can only upload screen time, never read data. Each row shows where it came from. When the same app arrives from several sources, the computer trackers count once among themselves, phone time adds to that, and a typed-in total only counts if it's larger than everything tracked.
 - **Wellbeing insights:** 10 features from the last 7 days (screen hours, leisure share, late-night sessions, break ratio, focus hours, abandon rate, week-over-week trend, and optional private stress, energy and sleep check-ins) feed two models:
   - a logistic-regression model whose per-feature contributions are shown as bars ("raises" or "lowers" your score, with your value against a typical one);
   - a Mamdani fuzzy inference system whose fired rules and strengths are listed.
@@ -98,11 +99,11 @@ Everything below is functional against the real database, not mocked.
 | Want | Status |
 |---|---|
 | Time per website (Chrome, Edge, Brave) | **Built:** `extension/`. Load unpacked in developer mode, or publish to the Chrome Web Store / Edge Add-ons. |
-| Time per desktop app on Windows | **Built:** `desktop-tracker/`. Python standard library; can be packaged as an .exe. |
+| Time per desktop app on Windows and macOS | **Built:** `desktop-tracker/`. Python standard library; can be packaged as an .exe on Windows. |
+| Android app usage | **Built:** `android/`. Uses Usage Access; CI builds the APK and publishes it at `/releases/tag/android-latest`. |
 | Voice for big groups or strict networks | **Built:** set `LIVEKIT_*` (LiveKit Cloud or self-hosted). |
 | Firefox / Safari | Not built. Firefox would need small manifest changes; Safari needs an Xcode-wrapped extension. |
-| macOS / Linux desktop apps | Not built. The tracker's logic is portable; only its Windows foreground/idle layer would need a macOS or X11 version. |
-| Android app usage | Not built. Needs a native app using `UsageStatsManager` after the user grants Usage Access. |
+| Linux desktop apps | Not built. The tracker's logic is portable; it would need an X11/Wayland foreground and idle layer. |
 | iPhone app usage | Not possible for ordinary apps. Apple's Screen Time API needs a special entitlement and doesn't export per-app numbers. Users keep entering phone totals by hand. |
 
 All trackers use the same upload endpoint, so any new one only needs a device key and this call:
@@ -119,7 +120,8 @@ Each upload replaces that device type's earlier totals for those days, so re-sen
 
 Every push runs `.github/workflows/ci.yml`:
 - the backend suite on SQLite and on PostgreSQL 16, with Node 20, 22 and 24;
-- the desktop tracker tests;
+- the desktop tracker tests (Windows and macOS logic);
+- the Android unit tests and APK build (APK published on pushes to `main`);
 - a syntax check of the dashboard and extension scripts.
 
 ## About the "AI" claims

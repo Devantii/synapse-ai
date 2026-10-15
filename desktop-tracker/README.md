@@ -1,6 +1,8 @@
-# Synapse desktop tracker (Windows)
+# Synapse desktop tracker (Windows and macOS)
 
 Measures how long each desktop app is in front of you while you're active, and adds the daily totals to your Synapse account. A single Python file using only the standard library.
+
+On a Mac, see [macOS](#macos) below; everything else in this guide applies to both.
 
 ## Requirements
 
@@ -34,6 +36,21 @@ Measures how long each desktop app is in front of you while you're active, and a
    ```
 
    This adds a small launcher to your Startup folder. Remove it with `uninstall-startup`.
+
+## macOS
+
+Requires macOS 11 or newer and Python 3.9+. Check with `python3 --version`; if it's missing, macOS offers to install it.
+
+```bash
+python3 synapse_tracker.py setup            # paste the server address and key from Synapse > Privacy
+python3 synapse_tracker.py run              # Ctrl+C to stop
+python3 synapse_tracker.py install-startup  # start at login, in the background
+```
+
+- **How it measures:** the foreground app comes from `lsappinfo` and idle time from `ioreg`. Both are built into macOS, so no Accessibility or Screen Recording permission is needed.
+- **Starting at login:** `install-startup` adds a LaunchAgent at `~/Library/LaunchAgents/ai.synapse.tracker.plist`, which also starts it now and restarts it if it crashes. `uninstall-startup` removes it.
+- **Not counted:** Safari, Chrome, Arc, Firefox, Edge and Brave by default (the browser extension covers them), plus the lock screen, screen saver, Dock and Control Center.
+- **Where data lives:** `~/Library/Application Support/SynapseTracker/`.
 
 ## Everyday commands
 

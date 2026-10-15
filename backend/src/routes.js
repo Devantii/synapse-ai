@@ -482,8 +482,9 @@ get('/rooms/:id/messages', async (req, res) => {
 get('/devices', async (req, res) => res.json(await devices.list(req.user.id)));
 post('/devices', async (req, res) => {
   const kind = devices.KINDS[req.body.kind];
-  if (!kind) throw new HttpError(400, 'kind must be "extension" or "desktop".');
-  const name = text(req.body.name || (kind === 'extension' ? 'Browser extension' : 'Desktop tracker'), 'Name', 1, 40);
+  if (!kind) throw new HttpError(400, 'kind must be "extension", "desktop" or "phone".');
+  const DEFAULT_NAMES = { extension: 'Browser extension', desktop: 'Desktop tracker', phone: 'Android phone' };
+  const name = text(req.body.name || DEFAULT_NAMES[kind], 'Name', 1, 40);
   if ((await devices.list(req.user.id)).length >= 10) throw new HttpError(400, 'You can connect up to 10 devices. Revoke one first.');
   const { id, token } = await devices.create(req.user.id, name, kind);
   res.status(201).json({ id, token, name, kind, note: 'Copy this key now. It will not be shown again.' });

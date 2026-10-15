@@ -1,5 +1,6 @@
 # Runs on every push and pull request: the backend suite on SQLite and PostgreSQL,
-# the desktop tracker tests, and a syntax check of the dashboard and extension.
+# the desktop tracker tests, a syntax check of the dashboard and extension, and the Android build.
+# Pushes to main also publish the Android APK at /releases/tag/android-latest.
 name: CI
 
 on:
@@ -67,3 +68,37 @@ jobs:
           done
       - name: Extension manifest is valid JSON
         run: node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
+
+  android:
+    name: Android app (tests + APK)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to publish the APK as a release
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests and debug APK
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk synapse-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synapse-android-apk
+          path: android/synapse-android.apk
+      - name: Publish "android-latest" release (main branch only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest synapse-android.apk \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Synapse for Android (latest build)" \
+            --notes "Built automatically from ${GITHUB_SHA::7}. On your phone: download synapse-android.apk, open it, and allow installing from this source. Then open Synapse, allow Usage access, and connect it from Synapse > Privacy > Connect Android phone."

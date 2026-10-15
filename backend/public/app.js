@@ -869,8 +869,8 @@ VIEWS['screen-time'] = async (main) => {
         </section>
         <aside class="note" style="font-size:var(--step--1)">
           <p><strong>What Synapse can and can't see.</strong> A website can only measure itself. Synapse records how long this tab is open and in front of you (shown as "Synapse AI, measured"), if you allow screen-time saving.</p>
-          <p>It cannot see other apps or websites by itself. To track them automatically, install the <strong>Synapse browser extension</strong> (per-site time) or the <strong>Windows desktop tracker</strong> (per-app time) and connect them in <a href="#/privacy">Privacy</a>. Phone usage still needs to be entered here: iOS doesn't share it with ordinary apps, and Android needs a native app.</p>
-          <p>If the same app is both typed in and tracked, only the larger number counts.</p>
+          <p>It cannot see other apps or websites by itself. To track them automatically, connect the <strong>browser extension</strong> (per-site time), the <strong>desktop tracker</strong> for Windows or Mac (per-app time), or the <strong>Android app</strong> (per-app phone time) in <a href="#/privacy">Privacy</a>. iPhones don't share app usage with ordinary apps, so enter iPhone time here.</p>
+          <p>Phone time adds to computer time. A typed-in total only counts if it's larger than everything tracked for that app, so estimates are never counted twice.</p>
           <p style="margin:0">Totals for one day can't exceed 24 hours. Saving an app again for the same day replaces its total.</p>
         </aside>
       </div>
@@ -1264,9 +1264,9 @@ VIEWS.privacy = async (main) => {
       <div class="stack">
         <section class="panel"><h2 style="font-size:var(--step-1)">What Synapse may save</h2><form id="consent-form">${consentControls(c)}</form></section>
         <section class="panel" id="devices"><h2 style="font-size:var(--step-1)">Connected trackers</h2>
-          <p>The browser extension and desktop tracker send daily totals using a device key. A key can only upload screen time; it can't read your data or sign in. Revoke it any time.</p>
+          <p>The browser extension, desktop tracker and Android app send daily totals using a device key. A key can only upload screen time; it can't read your data or sign in. Revoke it any time.</p>
           <div id="device-list"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn" data-connect="extension">Connect browser extension</button><button class="btn" data-connect="desktop">Connect desktop tracker</button></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn" data-connect="extension">Connect browser extension</button><button class="btn" data-connect="desktop">Connect desktop tracker</button><button class="btn" data-connect="phone">Connect Android phone</button></div>
           ${c.usage_tracking ? '' : '<p class="note" style="margin-top:14px"><strong>Syncing is paused.</strong> Trackers can only upload while "Save screen-time data" is on.</p>'}
         </section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Download or delete</h2>
@@ -1304,7 +1304,7 @@ VIEWS.privacy = async (main) => {
     try { await saveConsents(e.currentTarget); toast('Privacy setting saved'); route(); }
     catch (err) { fail(err); }
   });
-  const KIND = { extension: 'Browser extension', desktop: 'Desktop tracker' };
+  const KIND = { extension: 'Browser extension', desktop: 'Desktop tracker', phone: 'Android phone' };
   const paintDevices = (list) => {
     $('#device-list').innerHTML = list.length ? `<ul class="session-log">${list.map((d) => `
       <li><span><b>${esc(d.name)}</b><br><small>${KIND[d.kind]} · key ${esc(d.prefix)}… · ${d.last_used_at ? `last synced ${ago(d.last_used_at)}` : 'never synced'}</small></span>
@@ -1317,14 +1317,17 @@ VIEWS.privacy = async (main) => {
     try {
       if (con) {
         const kind = con.dataset.connect;
-        const name = prompt(`Name this ${kind === 'extension' ? 'browser' : 'computer'} so you can recognise it later:`, kind === 'extension' ? 'Chrome on my laptop' : 'My Windows PC');
+        const what = { extension: ['browser', 'Chrome on my laptop'], desktop: ['computer', 'My laptop'], phone: ['phone', 'My Android phone'] }[kind];
+        const name = prompt(`Name this ${what[0]} so you can recognise it later:`, what[1]);
         if (name === null) return;
         const r = await api('POST', '/devices', { kind, name: name.trim() || undefined });
         $('#key-value').textContent = r.token;
         $('#key-server').textContent = location.origin;
-        $('#key-help').textContent = kind === 'extension'
-          ? 'Open the Synapse extension, choose Settings, and paste the server address and key.'
-          : 'Run the tracker once with "python synapse_tracker.py setup" and paste the server address and key when asked.';
+        $('#key-help').textContent = {
+          extension: 'Open the Synapse extension, choose Settings, and paste the server address and key.',
+          desktop: 'Run the tracker once with "python3 synapse_tracker.py setup" (Windows or Mac) and paste the server address and key when asked.',
+          phone: 'Open the Synapse app on your phone and paste the server address and key. Tip: use Copy, then send it to yourself.',
+        }[kind];
         $('#key-dialog').showModal();
         paintDevices(await api('GET', '/devices'));
       }

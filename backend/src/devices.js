@@ -1,4 +1,4 @@
-// Device keys let the browser extension and desktop tracker send usage totals without ever holding the
+// Device keys let the browser extension, desktop tracker and Android app send usage totals without ever holding the
 // user's password or a full session. A key can only read basic status (focus state, daily limits) and
 // upload usage for its own kind.
 const crypto = require('crypto');
@@ -7,7 +7,7 @@ const rateLimit = require('express-rate-limit');
 const db = require('./db');
 
 const hash = (t) => crypto.createHash('sha256').update(t).digest('hex');
-const KINDS = { extension: 'extension', desktop: 'desktop' };
+const KINDS = { extension: 'extension', desktop: 'desktop', phone: 'phone' };
 const CATEGORIES = ['work', 'study', 'social', 'entertainment', 'games', 'news', 'communication', 'other'];
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);

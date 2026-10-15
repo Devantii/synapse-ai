@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ai.synapse.android'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ai.synapse.android'
+        minSdk 26          // Android 8.0+: app categories and java.time are available
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    // The app itself uses only the Android SDK. JUnit is for the core logic tests.
+    testImplementation 'junit:junit:4.13.2'
+}

@@ -135,6 +135,45 @@ class TrackerTests(unittest.TestCase):
         again = st.Tracker(self.pf, self.cfg, clock=self.clock)
         self.assertEqual(round(again.totals[self.today]["VS Code"]), 5)
 
+    # ---- macOS (outputs below are real `lsappinfo` / `ioreg` formats)
+    def mac(self, front_name, idle_ns=1_500_000_000):
+        outputs = {
+            "lsappinfo front": "ASN:0x0-0x1d01d:\n",
+            "lsappinfo info": f'"LSDisplayName"="{front_name}"\n' if front_name else "",
+            "ioreg": f'+-o IOHIDSystem  <class IOHIDSystem>\n    |   "HIDIdleTime" = {idle_ns}\n    |   "HIDParameters" = {{}}\n',
+        }
+        return st.MacPlatform(run=lambda args: next(v for k, v in outputs.items() if " ".join(args).startswith(k)))
+
+    def test_mac_parsing(self):
+        self.assertEqual(st.MacPlatform.parse_front_asn("ASN:0x0-0x1d01d:\n"), "ASN:0x0-0x1d01d:")
+        self.assertIsNone(st.MacPlatform.parse_front_asn(""))
+        self.assertEqual(st.MacPlatform.parse_display_name('"LSDisplayName"="Microsoft Word"\n'), "Microsoft Word")
+        self.assertEqual(st.MacPlatform.parse_display_name('"LSDisplayName"="My \\"Quoted\\" App"'), 'My "Quoted" App')
+        self.assertAlmostEqual(st.MacPlatform.parse_idle_ns('|   "HIDIdleTime" = 42000000000'), 42.0)
+        self.assertEqual(st.MacPlatform.parse_idle_ns("nothing"), 0.0)
+
+    def test_mac_tracking(self):
+        def track(name, secs, idle_ns=1_000_000_000):
+            self.t.platform = self.mac(name, idle_ns)
+            self.t.tick()
+            run(self.t, self.clock, secs)
+        track("Code", 30)                      # VS Code reports itself as "Code"
+        track("Microsoft Excel", 20)
+        track("Safari", 20)                    # browser: ignored by default
+        track("loginwindow", 20)               # locked screen
+        track("Notes", 15, idle_ns=300 * 10**9)  # away from the keyboard
+        self.t.tick()
+        self.assertEqual(self.totals(), {"VS Code": 30, "Excel": 20})
+        self.assertEqual(st.categorize("VS Code", {}), "work")
+        self.assertEqual(st.categorize("Messages", {}), "communication")
+
+    def test_mac_launch_agent(self):
+        import plistlib
+        plist = plistlib.loads(st.mac_agent_plist("/usr/bin/python3", "/Users/me/synapse_tracker.py").encode())
+        self.assertEqual(plist["ProgramArguments"], ["/usr/bin/python3", "/Users/me/synapse_tracker.py", "run"])
+        self.assertTrue(plist["RunAtLoad"])
+        self.assertEqual(plist["Label"], "ai.synapse.tracker")
+
     @unittest.skipUnless(os.environ.get("SYNAPSE_TEST_SERVER"), "set SYNAPSE_TEST_SERVER and SYNAPSE_TEST_KEY")
     def test_live_sync(self):
         self.cfg.update(server=os.environ["SYNAPSE_TEST_SERVER"], key=os.environ["SYNAPSE_TEST_KEY"])
