@@ -16,6 +16,7 @@ process.env.OPENAI_API_KEY = '';
 process.env.LIVEKIT_URL = '';
 process.env.ADMIN_USERNAMES = 'bob';
 process.env.SMTP_URL = 'json';
+process.env.ROOM_MIN_VISIT_S = '1';
 process.env.CRON_SECRET = 'cron-test-key';
 process.env.APP_URL = 'https://synapse.example';
 
@@ -672,6 +673,39 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('GET', '/api/email', null, M)).data.weekly === true, 'forged link does nothing');
     await fetch(base + unsub);
     assert((await api('GET', '/api/email', null, M)).data.weekly === false, 'unsubscribed');
+  });
+
+  console.log('Room time, trends, sample buddies');
+  await test('time in rooms is tracked and shown in presence', async () => {
+    const { io: ioc } = require('socket.io-client');
+    const s = ioc(base, { auth: { token: B }, transports: ['websocket'] });
+    await new Promise((r) => s.on('connect', r));
+    const emit = (ev, data) => new Promise((r) => s.emit(ev, data, r));
+    const today = new Date().toISOString().slice(0, 10);
+    const j = await emit('room:join', { roomId: 'gentle-start', day: today });
+    const me = j.members.find((m) => m.socketId === s.id);
+    assert(me.joinedAt && Date.now() - me.joinedAt < 5000, 'presence carries join time');
+    await new Promise((r) => setTimeout(r, 2100));
+    const again = await emit('room:join', { roomId: 'gentle-start', day: today });
+    assert(again.members.find((m) => m.socketId === s.id).joinedAt === me.joinedAt, 'reconnect keeps the clock');
+    await emit('room:leave');
+    await new Promise((r) => setTimeout(r, 300));
+    s.close();
+    const t = await api('GET', `/api/rooms/time?day=${today}&room=gentle-start`, null, B);
+    assert(t.data.todaySeconds >= 2 && t.data.roomTodaySeconds >= 2 && t.data.weekSeconds >= t.data.todaySeconds, JSON.stringify(t.data));
+  });
+  await test('trends: 14-day series, weekday x hour heat, room minutes', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const reg = await api('POST', '/api/auth/register', { username: 'trends', password: 'trends-pass-1' });
+    const T = reg.data.token;
+    await api('PUT', '/api/consents', { activity_tracking: true, usage_tracking: true }, T);
+    await api('POST', '/api/sample-data', { today }, T);
+    const r = await api('GET', `/api/insights/trends?day=${today}`, null, T);
+    assert(r.data.series.length === 14 && r.data.heat.length === 7 && r.data.heat[0].length === 24 && r.data.roomMin.length === 14);
+    assert(r.data.series.some((d) => d.sleep != null) && r.data.best && r.data.best.minutes > 0, JSON.stringify(r.data.best));
+    const b = await api('GET', '/api/buddies', null, T);
+    assert(b.data.buddies.filter((x) => x.sample).length === 2, 'sample buddies with sample data');
+    assert((await api('GET', '/api/buddies', null, B)).data.buddies.every((x) => !x.sample), 'never without sample data');
   });
 
   console.log('Export + deletion');

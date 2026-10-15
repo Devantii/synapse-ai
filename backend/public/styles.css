@@ -643,3 +643,48 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 .pill.bad { background: color-mix(in srgb, var(--berry) 15%, var(--surface)); color: var(--berry); }
 .email-sheet { width: min(640px, 96vw); }
 .email-sheet iframe { width: 100%; height: min(70vh, 720px); border: 1.5px solid var(--line); border-radius: 12px; background: #EEF2F3; }
+
+/* ---------- room clock + music ---------- */
+.room-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin-bottom: 16px; padding: 14px 18px; }
+.room-clock { display: flex; align-items: center; gap: 18px; }
+.room-clock > svg { width: 30px; height: 30px; color: var(--lichen); }
+.room-clock div { display: grid; }
+.room-clock b { font-size: 1.6rem; line-height: 1.1; letter-spacing: -0.02em; }
+.room-clock span { font-size: 12px; color: var(--ink-3); }
+.room-bar .ambient { width: auto; flex: 1 1 380px; justify-content: flex-end; }
+@media (max-width: 600px) { .room-bar .ambient { justify-content: flex-start; } }
+.buddy.sample { opacity: .85; }
+
+/* ---------- Insights > Trends ---------- */
+.tabs-inline .chip { text-decoration: none; }
+.trend-tiles { margin: 0 0 18px; }
+.bars { width: 100%; height: auto; display: block; font-size: 11px; fill: var(--ink-3); }
+.bars .base { stroke: var(--line); }
+.bars rect { opacity: .55; }
+.bars rect.today { opacity: 1; }
+.bars.focus rect { fill: var(--c-focus); }
+.bars.screen rect { fill: var(--c-screen); }
+.bars.sleep rect { fill: var(--dusk, #6A5A99); }
+.bars.rooms rect { fill: var(--lichen); }
+.bars.dist rect { fill: var(--amber); }
+.bars .val { fill: var(--ink); font-weight: 700; }
+.bars .nd { fill: var(--ink-3); font-size: 16px; }
+.moodchart { width: 100%; height: auto; display: block; font-size: 11px; fill: var(--ink-3); }
+.moodchart .grid { stroke: var(--line); stroke-dasharray: 2 4; }
+.moodchart path { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+.moodchart path.energy { stroke: var(--c-focus); } .moodchart path.stress { stroke: var(--berry); }
+.moodchart circle { stroke: var(--surface); stroke-width: 2; }
+.moodchart circle.energy { fill: var(--c-focus); } .moodchart circle.stress { fill: var(--berry); }
+.trend-key i.en { background: var(--c-focus); } .trend-key i.st { background: var(--berry); }
+.heat-wrap { overflow-x: auto; }
+.heat { border-collapse: separate; border-spacing: 2px; width: 100%; min-width: 460px; font-size: 10px; color: var(--ink-3); }
+.heat th { font-weight: 600; text-align: left; padding: 0 4px 0 0; }
+.heat thead th { text-align: left; height: 14px; }
+.heat td { height: 16px; border-radius: 3px; background: color-mix(in srgb, var(--c-focus) calc(var(--a) * 100%), var(--surface-2)); }
+
+/* ---------- language picker ---------- */
+.lang select { min-height: 0; padding: 4px 26px 4px 8px; font-size: 12px; width: auto; border-radius: 8px; }
+.rail-user .lang { display: block; margin: 6px 0; }
+.auth-panel { position: relative; }
+.auth-lang { position: absolute; top: 16px; right: 16px; }
+@media (max-width: 760px) { .rail-user .lang { display: none; } }

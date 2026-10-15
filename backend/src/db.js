@@ -263,6 +263,17 @@ CREATE TABLE IF NOT EXISTS blocks (
   UNIQUE (blocker_id, blocked_id)
 );
 
+-- Time spent in focus rooms (one row per visit, written when you leave).
+CREATE TABLE IF NOT EXISTS room_visits (
+  id        ${T.ID},
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  room_id   TEXT NOT NULL,
+  day       TEXT NOT NULL,              -- your local day when you joined
+  seconds   INTEGER NOT NULL,
+  joined_at TEXT NOT NULL DEFAULT ${T.NOW}
+);
+CREATE INDEX IF NOT EXISTS idx_room_visits_user ON room_visits(user_id, day);
+
 -- Replies to community check-ins.
 CREATE TABLE IF NOT EXISTS post_replies (
   id         ${T.ID},

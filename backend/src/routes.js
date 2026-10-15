@@ -628,6 +628,7 @@ get('/export', async (req, res) => {
     preferences: await prefs(id),
     email: (await db.get('SELECT email, email_verified FROM users WHERE id = ?', [id])),
     distractions: await q('SELECT day, at, kind, note FROM distractions WHERE user_id = ? ORDER BY id'),
+    roomVisits: await q('SELECT room_id, day, seconds, joined_at FROM room_visits WHERE user_id = ? ORDER BY id'),
     buddies: await db.all(`SELECT u.display_name AS name, b.status, b.created_at FROM buddies b JOIN users u
       ON u.id = CASE WHEN b.requester_id = ? THEN b.addressee_id ELSE b.requester_id END WHERE b.requester_id = ? OR b.addressee_id = ?`, [id, id, id]),
     cheersReceived: await q('SELECT kind, created_at FROM cheers WHERE to_id = ? ORDER BY id'),
@@ -639,7 +640,7 @@ get('/export', async (req, res) => {
 });
 
 const DELETE_SCOPES = {
-  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions'],
+  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions', 'room_visits'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
   community: ['posts', 'post_replies', 'reactions', 'room_messages', 'hidden_posts'],

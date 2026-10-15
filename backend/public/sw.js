@@ -1,7 +1,7 @@
 // Synapse service worker: makes the app installable, opens offline with the last-loaded app shell,
 // and shows end-of-session notifications. It never caches API responses or anything personal.
-const CACHE = 'synapse-shell-v1';
-const SHELL = ['/', '/styles.css', '/app.js', '/favicon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE = 'synapse-shell-v2';
+const SHELL = ['/', '/styles.css', '/app.js', '/i18n.js', '/favicon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -2,6 +2,7 @@
 const db = require('./db');
 const { verify } = require('./auth');
 
+const MIN_VISIT_S = Number(process.env.ROOM_MIN_VISIT_S ?? 30); // shorter visits aren't counted as time in a room
 const MAX_AUDIO_PEERS = 6; // a peer-to-peer call stays usable up to ~6 people; beyond that use LiveKit.
 const members = new Map(); // socketId -> { userId, name, roomId, focusing, focusEndsAt, audio, muted, video } (audio = on the call)
 
@@ -16,7 +17,7 @@ function roomTimer(roomId) {
 function roomMembers(roomId) {
   return [...members.entries()]
     .filter(([, m]) => m.roomId === roomId)
-    .map(([socketId, m]) => ({ socketId, userId: m.userId, name: m.name, focusing: m.focusing, focusEndsAt: m.focusEndsAt, audio: m.audio, muted: m.muted, video: !!m.video }));
+    .map(([socketId, m]) => ({ socketId, userId: m.userId, name: m.name, focusing: m.focusing, focusEndsAt: m.focusEndsAt, audio: m.audio, muted: m.muted, video: !!m.video, joinedAt: m.joinedAt }));
 }
 
 function attach(io) {
@@ -52,7 +53,12 @@ function attach(io) {
     const roomId = m.roomId;
     if (m.audio) socket.to(roomId).emit('audio:peer-left', { socketId: socket.id });
     socket.leave(roomId);
+    // Record the visit (time in room), ignoring quick peeks.
+    const seconds = m.joinedAt ? Math.round((Date.now() - m.joinedAt) / 1000) : 0;
+    if (seconds >= MIN_VISIT_S && seconds > 0) db.insert('INSERT INTO room_visits (user_id, room_id, day, seconds) VALUES (?, ?, ?, ?)', [m.userId, roomId, m.joinDay, Math.min(seconds, 16 * 3600)])
+      .catch((e) => console.error('[rooms] visit not saved:', e.message));
     m.roomId = null;
+    m.joinedAt = null;
     m.audio = false;
     m.video = false;
     broadcastPresence(roomId);
@@ -63,7 +69,7 @@ function attach(io) {
     socket.join(`user:${socket.user.id}`); // personal channel (buddy requests and cheers)
     members.set(socket.id, { userId: socket.user.id, name: socket.user.name, roomId: null, focusing: false, focusEndsAt: null, audio: false, muted: false, video: false });
 
-    socket.on('room:join', async ({ roomId } = {}, ack) => {
+    socket.on('room:join', async ({ roomId, day } = {}, ack) => {
       try {
         if (typeof roomId !== 'string' || !(await roomExists(roomId))) return ack?.({ error: 'Room not found.' });
       } catch (e) {
@@ -72,8 +78,12 @@ function attach(io) {
       }
       const m = members.get(socket.id);
       if (!m) return; // disconnected meanwhile
-      leave(socket);
+      const rejoin = m.roomId === roomId; // reconnects keep the clock running
+      const keep = rejoin ? { joinedAt: m.joinedAt, joinDay: m.joinDay } : null;
+      if (!rejoin) leave(socket);
       m.roomId = roomId;
+      m.joinedAt = keep?.joinedAt || Date.now();
+      m.joinDay = keep?.joinDay || (/^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) ? String(day) : new Date().toISOString().slice(0, 10));
       socket.join(roomId);
       broadcastPresence(roomId);
       io.emit('rooms:counts');

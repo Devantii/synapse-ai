@@ -1,3 +1,4 @@
+import { initI18n } from './i18n.js';
 // Synapse AI web dashboard. Plain ES modules, no build step.
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -11,6 +12,7 @@ const pad = (n) => String(n).padStart(2, '0');
 const localDay = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const localTs = (d = new Date()) => `${localDay(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 const shiftDay = (day, n) => { const d = new Date(day + 'T12:00:00'); d.setDate(d.getDate() + n); return localDay(d); };
+const fmtDur = (ms) => { const m = Math.floor(ms / 60000); return m < 1 ? '<1m' : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`; };
 const fmtMin = (m) => { m = Math.round(m || 0); const h = Math.floor(m / 60), r = m % 60; return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m`; };
 const initials = (n) => String(n || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
 const ago = (sqlTs) => {
@@ -322,7 +324,7 @@ function chime() {
 // ---------------------------------------------------------------- Ambient sounds
 // Generated live with the Web Audio API (no audio files): rain, ocean waves, wind and brown noise.
 const ambient = {
-  SOUNDS: { rain: 'Rain', waves: 'Waves', wind: 'Wind', brown: 'Brown noise' },
+  SOUNDS: { lofi: 'Lo-fi music', rain: 'Rain', waves: 'Waves', wind: 'Wind', brown: 'Brown noise' },
   ctx: null, master: null, nodes: [], kind: null,
   vol: store.get('synapse.ambient')?.vol ?? 0.5,
   buffer(brown) {
@@ -366,6 +368,7 @@ const ambient = {
       this.lfo(0.09, 0.45, g.gain); // slow swell
       this.lfo(0.09, 350, lp.frequency);
     }
+    if (kind === 'lofi') this.lofi();
     if (kind === 'wind') {
       const n = this.source(false), bp = ctx.createBiquadFilter(), g = ctx.createGain();
       bp.type = 'bandpass'; bp.frequency.value = 600; bp.Q.value = 1.2; g.gain.value = 0.5;
@@ -377,7 +380,56 @@ const ambient = {
     this.kind = kind;
     this.save(); this.paint();
   },
+  // Endless generative lo-fi: jazzy 7th chords, a soft melody, a lazy beat and vinyl crackle at 72 bpm.
+  lofi() {
+    const ctx = this.ctx, out = ctx.createGain(), lp = ctx.createBiquadFilter();
+    out.gain.value = 0.9; lp.type = 'lowpass'; lp.frequency.value = 2200;
+    lp.connect(out).connect(this.master);
+    const crackle = this.source(false), hp = ctx.createBiquadFilter(), cg = ctx.createGain();
+    hp.type = 'highpass'; hp.frequency.value = 4000; cg.gain.value = 0.012;
+    crackle.connect(hp).connect(cg).connect(out);
+    const noise = this.buffer(false);
+    const hz = (m) => 440 * 2 ** ((m - 69) / 12);
+    const CHORDS = [[48, 55, 59, 64], [45, 52, 55, 60], [50, 57, 60, 65], [43, 50, 53, 59]]; // Cmaj7 Am7 Dm7 G7
+    const SCALE = [72, 74, 76, 79, 81, 84];
+    const eighth = 60 / 72 / 2;
+    const tone = (freq, t, dur, vol, type = 'sine') => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.04); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g).connect(lp); o.start(t); o.stop(t + dur + 0.05);
+    };
+    const hit = (t, dur, vol, type, f) => {
+      const n = ctx.createBufferSource(), flt = ctx.createBiquadFilter(), g = ctx.createGain();
+      n.buffer = noise; flt.type = type; flt.frequency.value = f;
+      g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      n.connect(flt).connect(g).connect(out); n.start(t, Math.random() * 2); n.stop(t + dur + 0.02);
+    };
+    const kick = (t) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
+      g.gain.setValueAtTime(0.55, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(g).connect(out); o.start(t); o.stop(t + 0.32);
+    };
+    let step = 0, next = ctx.currentTime + 0.15;
+    const schedule = () => {
+      while (next < ctx.currentTime + 0.5) {
+        const t = next + (step % 2 ? 0.035 : 0); // a little swing
+        const chord = CHORDS[Math.floor(step / 8) % CHORDS.length];
+        if (step % 8 === 0) chord.forEach((m, i) => { tone(hz(m), t, eighth * 8, 0.05, i % 2 ? 'triangle' : 'sine'); });
+        if (step % 8 === 0 || step % 8 === 5) kick(t);
+        if (step % 8 === 4) hit(t, 0.16, 0.12, 'bandpass', 1800);
+        if (step % 2 === 1) hit(t, 0.04, 0.035, 'highpass', 7000);
+        if (Math.random() < 0.3 && step % 8 !== 0) tone(hz(SCALE[Math.floor(Math.random() * SCALE.length)]), t, eighth * 2.5, 0.035, 'triangle');
+        next += eighth; step++;
+      }
+    };
+    schedule();
+    this.lofiTimer = setInterval(schedule, 120);
+  },
   stop(quick) {
+    clearInterval(this.lofiTimer);
+    this.lofiTimer = null;
     const old = this.nodes, master = this.master;
     this.nodes = []; this.master = null; this.kind = null;
     if (master && this.ctx) {
@@ -807,6 +859,11 @@ async function renderRoom(main, roomId) {
   if (!room) { main.innerHTML = `<p class="empty">That room doesn't exist. <a href="#/rooms">See all rooms</a></p>`; return; }
   main.innerHTML = `
     <div class="page-head"><div><a href="#/rooms" class="muted">All rooms</a><h1>${esc(room.name)}</h1><p>${esc(room.description)}</p></div></div>
+    <section class="panel room-bar">
+      <div class="room-clock"><svg aria-hidden="true"><use href="#i-timer"/></svg><div><b class="num" id="room-elapsed">0:00</b><span>in this room</span></div>
+        <div><b class="num" id="room-today">–</b><span>in rooms today</span></div></div>
+      ${ambient.controls()}
+    </section>
     <section class="panel call">
       <div class="stage" id="stage" aria-label="People on camera"></div>
       <div class="stage-empty" id="stage-empty"><svg aria-hidden="true"><use href="#i-cam"/></svg>
@@ -817,7 +874,6 @@ async function renderRoom(main, roomId) {
       <aside class="stack room-side">
         <section class="panel"><h2 style="font-size:var(--step-1)">Group timer</h2><div id="group-timer"></div></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Here now</h2><ul class="people" id="people"></ul></section>
-        <section class="panel">${ambient.controls()}</section>
       </aside>
       <section class="panel chat">
         <div class="chat-log" id="chat-log" aria-live="polite"></div>
@@ -863,7 +919,7 @@ async function renderRoom(main, roomId) {
     $('#people').innerHTML = members.map((m) => {
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
       return `<li><span class="face">${esc(initials(m.name))}</span><span><b>${esc(m.name)}${m.socketId === state.socket?.id ? ' (you)' : ''}</b><br>
-        <span class="status ${m.focusing ? 'focusing' : ''}">${m.focusing ? `Focusing${mins != null ? `, ${mins} min left` : ''}` : 'Here'}${m.audio ? (m.video ? ' · on camera' : ' · in call') + (m.muted ? '' : ' · mic on') : ''}</span></span></li>`;
+        <span class="status ${m.focusing ? 'focusing' : ''}">${m.focusing ? `Focusing${mins != null ? `, ${mins} min left` : ''}` : 'Here'}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}${m.audio ? (m.video ? ' · on camera' : ' · in call') + (m.muted ? '' : ' · mic on') : ''}</span></span></li>`;
     }).join('');
     stage.paint(members);
   };
@@ -872,10 +928,25 @@ async function renderRoom(main, roomId) {
   state.socket.on('room:presence', onPresence);
   state.socket.on('room:message', onMessage);
 
-  const join = await emitAck('room:join', { roomId });
+  const join = await emitAck('room:join', { roomId, day: localDay() });
   if (join.error) return toast(join.error, 'err');
   rooms.current = roomId;
   paintPeople(join.members);
+
+  // Room clock: how long you've been here, and your total in rooms today.
+  const myJoin = join.members.find((m) => m.socketId === state.socket.id)?.joinedAt || Date.now();
+  let earlierToday = 0;
+  api('GET', `/rooms/time?day=${localDay()}`).then((t) => { earlierToday = t.todaySeconds * 1000; }).catch(() => {});
+  const paintClock = () => {
+    const el = $('#room-elapsed');
+    if (!el) return;
+    const ms = Date.now() - myJoin;
+    const sec = Math.floor(ms / 1000), h = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+    el.textContent = h ? `${h}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`;
+    $('#room-today').textContent = fmtDur(earlierToday + ms);
+  };
+  paintClock();
+  const clockTick = setInterval(paintClock, 1000);
 
   // Shared group timer: one block everyone in the room can see and focus along with.
   let gt = join.timer || null, gMode = 'focus', gMin = 25;
@@ -958,7 +1029,7 @@ async function renderRoom(main, roomId) {
     paintCall_();
     stage.refresh();
   });
-  const tick = setInterval(() => paintPeople(lastMembers), 30000); // refresh "min left"
+  const tick = setInterval(() => paintPeople(lastMembers), 30000); // refresh "min left" and time in room
 
   state.cleanup.push(() => {
     clearInterval(tick);
@@ -966,6 +1037,7 @@ async function renderRoom(main, roomId) {
     state.socket?.off('room:message', onMessage);
     paintCall = null;
     clearInterval(gTick);
+    clearInterval(clockTick);
     state.socket?.off('room:timer', onTimer);
     if (!location.hash.startsWith(`#/rooms/${roomId}`)) { rtc.leave(); state.socket?.emit('room:leave'); rooms.current = null; }
   });
@@ -1017,7 +1089,7 @@ const stage = {
       tile.querySelector('.tile-face').textContent = initials(m.name);
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
       tile.querySelector('.tile-name').innerHTML = `${m.muted ? '<svg class="mic-off" aria-label="mic off"><use href="#i-mic-off"/></svg>' : '<svg aria-label="mic on"><use href="#i-mic"/></svg>'}
-        <span>${esc(mine ? 'You' : m.name)}</span>${m.focusing ? `<em>${mins != null ? `${mins}m` : 'focusing'}</em>` : ''}`;
+        <span>${esc(mine ? 'You' : m.name)}${m.joinedAt ? ` · ${fmtDur(Date.now() - m.joinedAt)}` : ''}</span>${m.focusing ? `<em>${mins != null ? `${mins}m left` : 'focusing'}</em>` : ''}`;
     }
     el.querySelectorAll('.tile').forEach((t) => { if (!keep.has(t.dataset.key)) { const v = t.querySelector('video'); v.srcObject = null; t.remove(); } });
     const empty = document.getElementById('stage-empty');
@@ -1863,9 +1935,15 @@ document.addEventListener('click', (e) => {
   else if (confirm('Remove all sample data? Your own data stays.')) removeSampleData();
 });
 
-VIEWS.insights = async (main) => {
+const insightsTabs = (cur) => `<div class="chips tabs-inline" role="tablist" style="margin:-6px 0 18px">
+  <a class="chip" role="tab" href="#/insights" aria-pressed="${cur === 'overview'}">Overview</a>
+  <a class="chip" role="tab" href="#/insights/trends" aria-pressed="${cur === 'trends'}">Trends</a></div>`;
+
+VIEWS.insights = async (main, arg) => {
+  if (arg === 'trends') return renderTrendsView(main);
   if (!state.me.consents.ai_insights) {
     main.innerHTML = `<div class="page-head"><div><h1>Insights</h1><p>Machine learning and fuzzy logic that explain how balanced your week looks.</p></div></div>
+      ${insightsTabs('overview')}
       <div class="split"><section class="panel"><h2>Insights are off</h2><p>When you turn them on, Synapse analyses your saved focus sessions, screen-time totals and private mood check-ins to estimate how balanced your week looks, and shows exactly which patterns drove that estimate.</p>
       <ol class="how-ml">
         <li><b>10 patterns</b> are measured from your last 7 days: screen time, share on social and video, late-night sessions, breaks, deep-focus time, abandoned sessions, week-over-week change, stress, energy and sleep.</li>
@@ -1887,6 +1965,7 @@ VIEWS.insights = async (main) => {
 
   main.innerHTML = `
     <div class="page-head"><div><h1>Insights</h1><p>Based on the last 7 days. ${esc(ins.disclaimer)}</p></div></div>
+    ${insightsTabs('overview')}
     ${sampleBanner(ins.daysWithData < 2)}
     <div class="split">
       <div class="stack">
@@ -1970,6 +2049,81 @@ VIEWS.insights = async (main) => {
   });
 };
 
+// ---------------------------------------------------------------- Insights > Trends
+function barsSvg(values, labels, { cls = 'focus', fmt = fmtMin, h = 140, tips } = {}) {
+  const W = 560, L = 4, R = 4, T = 18, B = 22, n = values.length;
+  const max = Math.max(1, ...values.map((v) => v || 0));
+  const slot = (W - L - R) / n, bw = Math.min(26, slot * 0.64);
+  const last = values.length - 1;
+  return `<svg class="bars ${cls}" viewBox="0 0 ${W} ${h}" role="img" aria-label="${esc(labels.map((l, i) => `${l}: ${values[i] == null ? 'no data' : fmt(values[i])}`).join(', '))}">
+    <line x1="${L}" x2="${W - R}" y1="${h - B}" y2="${h - B}" class="base"/>
+    ${values.map((v, i) => {
+      const x = L + slot * i + (slot - bw) / 2, bh = v ? Math.max(2, (v / max) * (h - T - B)) : 0;
+      return `<g><title>${esc(tips ? tips[i] : `${labels[i]}: ${v == null ? 'no data' : fmt(v)}`)}</title>
+        ${v == null ? `<text x="${x + bw / 2}" y="${h - B - 4}" text-anchor="middle" class="nd">·</text>` : `<rect x="${x.toFixed(1)}" y="${(h - B - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" class="${i === last ? 'today' : ''}"/>`}
+        ${i % 2 === last % 2 ? `<text x="${(x + bw / 2).toFixed(1)}" y="${h - 6}" text-anchor="middle">${esc(labels[i])}</text>` : ''}</g>`;
+    }).join('')}
+    ${values[last] ? `<text x="${(L + slot * last + slot / 2).toFixed(1)}" y="${Math.max(12, h - B - Math.max(2, (values[last] / max) * (h - T - B)) - 5).toFixed(1)}" text-anchor="middle" class="val">${esc(fmt(values[last]))}</text>` : ''}
+  </svg>`;
+}
+
+function moodSvg(series) {
+  const W = 560, H = 170, L = 26, R = 8, T = 10, B = 22, n = series.length;
+  const x = (i) => L + (i / (n - 1)) * (W - L - R);
+  const y = (v) => T + (1 - (v - 1) / 4) * (H - T - B);
+  const line = (k) => {
+    let d = '', pen = false;
+    series.forEach((p, i) => { if (p[k] == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`; pen = true; });
+    return d;
+  };
+  const dots = (k) => series.map((p, i) => (p[k] == null ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(p[k]).toFixed(1)}" r="3.5" class="${k}"><title>${shortDate(p.day)}: ${k} ${p[k]}/5</title></circle>`)).join('');
+  return `<svg class="moodchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Energy and stress over 14 days">
+    ${[1, 3, 5].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('')}
+    <path d="${line('energy')}" class="energy"/><path d="${line('stress')}" class="stress"/>${dots('energy')}${dots('stress')}
+    <text x="${L}" y="${H - 5}">${shortDate(series[0].day)}</text><text x="${W - R}" y="${H - 5}" text-anchor="end">Today</text></svg>`;
+}
+
+async function renderTrendsView(main) {
+  const t = await api('GET', `/insights/trends?day=${localDay()}`);
+  const S = t.series, labels = S.map((d) => new Date(d.day + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'narrow' }));
+  const avg = (k) => { const v = S.map((d) => d[k]).filter((x) => x != null && (k !== 'focusMin' || x > 0)); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const focusAvg = S.reduce((a, d) => a + d.focusMin, 0) / 14, screenAvg = avg('screenMin'), sleepAvg = avg('sleep');
+  const roomTotal = t.roomMin.reduce((a, b) => a + b, 0);
+  const maxHeat = Math.max(1, ...t.heat.flat());
+  const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const empty = !S.some((d) => d.focusMin || d.screenMin != null || d.energy != null);
+  main.innerHTML = `
+    <div class="page-head"><div><h1>Insights</h1><p>How your focus, screen time, mood and sleep moved over the last two weeks.</p></div></div>
+    ${insightsTabs('trends')}
+    ${sampleBanner(empty)}
+    <div class="review-grid trend-tiles">
+      <div><b class="num">${fmtMin(focusAvg)}</b><span>focus a day (14-day average)</span></div>
+      <div><b class="num">${screenAvg != null ? fmtMin(screenAvg) : '–'}</b><span>screen time a day</span></div>
+      <div><b class="num">${sleepAvg != null ? (Math.round(sleepAvg * 10) / 10) + 'h' : '–'}</b><span>average sleep</span></div>
+      <div><b class="num">${fmtMin(roomTotal)}</b><span>in study rooms</span></div>
+    </div>
+    <div class="split trends">
+      <div class="stack">
+        <section class="panel"><h2 style="font-size:var(--step-1)">Focus per day</h2>${barsSvg(S.map((d) => d.focusMin), labels, { cls: 'focus', tips: S.map((d) => `${shortDate(d.day)}: ${fmtMin(d.focusMin)} focused`) })}</section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Screen time per day</h2>${barsSvg(S.map((d) => d.screenMin), labels, { cls: 'screen', tips: S.map((d) => `${shortDate(d.day)}: ${d.screenMin == null ? 'not logged' : fmtMin(d.screenMin)}`) })}
+          <p class="muted" style="font-size:12px;margin:4px 0 0">A dot means no screen time was logged that day.</p></section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">When you focus</h2>
+          <p class="muted" style="font-size:var(--step--1)">Focus minutes by weekday and start hour, last 8 weeks.${t.best ? ` Your strongest slot: <b>${esc(t.best.weekday)}s around ${esc(t.best.hour)}</b>.` : ''}</p>
+          <div class="heat-wrap"><table class="heat" aria-label="Focus minutes by weekday and hour">
+            <thead><tr><th></th>${Array.from({ length: 24 }, (_, h) => `<th>${h % 3 === 0 ? (h === 0 ? '12a' : h < 12 ? h + 'a' : h === 12 ? '12p' : (h - 12) + 'p') : ''}</th>`).join('')}</tr></thead>
+            <tbody>${t.heat.map((row, wd) => `<tr><th>${WD[wd]}</th>${row.map((m, h) => `<td style="--a:${m ? (0.18 + 0.82 * m / maxHeat).toFixed(2) : 0}" title="${WD[wd]} ${h}:00 · ${m ? fmtMin(m) : 'no focus'}"></td>`).join('')}</tr>`).join('')}</tbody></table></div></section>
+      </div>
+      <div class="stack">
+        <section class="panel"><h2 style="font-size:var(--step-1)">Energy and stress</h2>
+          ${S.some((d) => d.energy != null) ? moodSvg(S) + '<div class="trend-key"><span><i class="en"></i>Energy</span><span><i class="st"></i>Stress</span><span>From your private check-ins (1–5)</span></div>'
+            : '<p class="empty" style="margin:0">Check in on the Insights page (energy, stress, sleep) to see this.</p>'}</section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Sleep</h2>${S.some((d) => d.sleep != null) ? barsSvg(S.map((d) => d.sleep), labels, { cls: 'sleep', fmt: (v) => `${v}h`, h: 110, tips: S.map((d) => `${shortDate(d.day)}: ${d.sleep == null ? 'not logged' : d.sleep + 'h'}`) }) : '<p class="empty" style="margin:0">Add hours slept in your check-ins.</p>'}</section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Time in study rooms</h2>${roomTotal ? barsSvg(t.roomMin, labels, { cls: 'rooms', h: 110, tips: S.map((d, i) => `${shortDate(d.day)}: ${fmtMin(t.roomMin[i])} in rooms`) }) : '<p class="empty" style="margin:0">Join a room on the Rooms page; time you spend there shows up here.</p>'}</section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Distractions logged</h2>${S.some((d) => d.distractions) ? barsSvg(S.map((d) => d.distractions || 0), labels, { cls: 'dist', fmt: (v) => String(v), h: 110 }) : '<p class="empty" style="margin:0">Tap "Got distracted?" during focus blocks to track this.</p>'}</section>
+      </div>
+    </div>`;
+}
+
 // Weekly review (Progress page).
 async function renderReview() {
   const el = $('#review');
@@ -1997,10 +2151,14 @@ async function renderBuddies() {
   let b;
   try { b = await api('GET', `/buddies?day=${localDay()}`); } catch { return; }
   el.innerHTML = `<h2 style="font-size:var(--step-1)">Accountability buddies</h2>
-    <p class="muted" style="font-size:var(--step--1)">Buddies see only your focus time today, your daily goal and your streak. Nothing else.</p>
+    <p class="muted" style="font-size:var(--step--1)">Buddies see only your focus time today, your daily goal and your streak. Nothing else.${b.buddies.some((x) => x.sample) ? ' The two marked "sample" are made up, to show how it works; they go when you remove sample data.' : ''}</p>
     ${b.incoming.map((r) => `<div class="buddy req"><span><b>${esc(r.name)}</b> wants to be buddies</span><button class="btn grow" data-bud-accept="${r.id}">Accept</button><button class="link" data-bud-del="${r.id}">Decline</button></div>`).join('')}
     ${b.buddies.map((x) => {
       const pct = Math.min(1, x.today.focusMin / x.today.goalMin);
+      if (x.sample) return `<div class="buddy sample"><span class="face">${esc(initials(x.name.replace('Sample buddy: ', '')))}</span><div class="bud-main"><b>${esc(x.name.replace('Sample buddy: ', ''))}</b> <span class="pill">sample</span>
+        <div class="level-bar goal-bar"><i style="width:${Math.round(Math.min(1, x.today.focusMin / x.today.goalMin) * 100)}%"></i></div>
+        <small>${fmtMin(x.today.focusMin)} of ${fmtMin(x.today.goalMin)} today · ${x.streak}-day streak</small></div>
+        <div class="bud-act"><button class="btn" disabled title="Sample buddies are just for the demo">${x.today.focusMin ? 'Cheer' : 'Nudge'}</button></div></div>`;
       return `<div class="buddy"><span class="face">${esc(initials(x.name))}</span><div class="bud-main"><b>${esc(x.name)}</b>
         <div class="level-bar goal-bar"><i style="width:${Math.round(pct * 100)}%"></i></div>
         <small>${fmtMin(x.today.focusMin)} of ${fmtMin(x.today.goalMin)} today · ${x.streak}-day streak</small></div>
@@ -2298,6 +2456,7 @@ async function notify(title, body, always = false) {
 
 // ---------------------------------------------------------------- boot
 $('#logout').addEventListener('click', () => signOut());
+initI18n();
 setupAuth();
 (async () => {
   if (state.token) {

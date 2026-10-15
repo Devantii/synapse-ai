@@ -63,8 +63,9 @@ jobs:
           node-version: 22
       - name: Check every browser script parses
         run: |
+          # Parsed as ES modules (the dashboard and extension use import/export).
           for f in backend/public/*.js extension/*.js; do
-            node --check "$f" || exit 1
+            cp "$f" "$RUNNER_TEMP/check.mjs" && node --check "$RUNNER_TEMP/check.mjs" || { echo "Syntax error in $f"; exit 1; }
           done
       - name: Extension manifest is valid JSON
         run: node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"

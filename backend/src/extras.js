@@ -201,6 +201,12 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
       const lastCheer = await db.get('SELECT created_at FROM cheers WHERE from_id = ? AND to_id = ? ORDER BY id DESC LIMIT 1', [me, u.id]);
       out.buddies.push({ ...base, today: { focusMin: Math.round(Number(f.m)), blocks: Number(f.n), goalMin: p.dailyGoalMin }, streak: rw.currentStreak || 0, lastCheerAt: lastCheer?.created_at || null });
     }
+    // With "Try with sample data" on, two clearly labelled sample buddies show how this looks.
+    if (await db.get('SELECT 1 AS ok FROM focus_sessions WHERE user_id = ? AND sample = 1 LIMIT 1', [me])) {
+      out.buddies.push(
+        { id: -1, sample: true, name: 'Sample buddy: Riya', username: null, today: { focusMin: 75, blocks: 3, goalMin: 120 }, streak: 6, lastCheerAt: null },
+        { id: -2, sample: true, name: 'Sample buddy: Kabir', username: null, today: { focusMin: 0, blocks: 0, goalMin: 90 }, streak: 2, lastCheerAt: null });
+    }
     out.cheers = (await db.all(`SELECT c.id, c.kind, c.created_at, u.display_name AS "from" FROM cheers c JOIN users u ON u.id = c.from_id
       WHERE c.to_id = ? ORDER BY c.id DESC LIMIT 10`, [me]));
     res.json(out);
@@ -252,6 +258,39 @@ module.exports = function extras({ get, post, del, HttpError, text, intId, requi
     await db.insert('INSERT INTO cheers (from_id, to_id, kind) VALUES (?, ?, ?)', [req.user.id, b.other_id, kind]);
     req.app.get('io')?.to(`user:${b.other_id}`).emit('buddy:cheer', { from: req.user.name, kind, text: `${req.user.name} ${CHEERS[kind]}` });
     res.status(201).json({ ok: true });
+  });
+
+  // ------------------------------------------------------------------ 7. time in rooms
+  get('/rooms/time', async (req, res) => {
+    const day = dayOf(req.query.day), from = shift(day, -6);
+    const rows = await db.all('SELECT room_id, day, seconds FROM room_visits WHERE user_id = ? AND day BETWEEN ? AND ?', [req.user.id, from, day]);
+    const sum = (f) => rows.filter(f).reduce((s, r) => s + Number(r.seconds), 0);
+    res.json({ todaySeconds: sum((r) => r.day === day), weekSeconds: sum(() => true),
+      roomTodaySeconds: req.query.room ? sum((r) => r.day === day && r.room_id === String(req.query.room)) : 0 });
+  });
+
+  // ------------------------------------------------------------------ 8. trends (Insights > Trends)
+  get('/insights/trends', async (req, res) => {
+    const to = dayOf(req.query.day), from = shift(to, -13);
+    const rows = await daily(req.user.id, from, to);
+    const series = Array.from({ length: 14 }, (_, i) => {
+      const day = shift(from, i), r = rows.find((x) => x.day === day) || {};
+      return { day, focusMin: Math.round(r.focusMin || 0), screenMin: r.screenMin != null ? Math.round(r.screenMin) : null,
+        energy: r.energy ?? null, stress: r.stress ?? null, sleep: r.sleep ?? null, distractions: r.distractions || 0 };
+    });
+    // Focus minutes by weekday (Mon = 0) and start hour over 8 weeks.
+    const heat = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    const sess = await db.all(`SELECT actual_min, day, started_at FROM focus_sessions WHERE user_id = ? AND kind = 'focus' AND completed = 1 AND day BETWEEN ? AND ?`, [req.user.id, shift(to, -55), to]);
+    for (const s of sess) {
+      const wd = (new Date(`${s.day}T12:00:00Z`).getUTCDay() + 6) % 7;
+      const h = parseInt(String(s.started_at).slice(11, 13), 10) || 0;
+      heat[wd][h] += Number(s.actual_min);
+    }
+    const visits = await db.all('SELECT day, seconds FROM room_visits WHERE user_id = ? AND day BETWEEN ? AND ?', [req.user.id, from, to]);
+    const roomMin = series.map((d) => Math.round(visits.filter((v) => v.day === d.day).reduce((a, v) => a + Number(v.seconds), 0) / 60));
+    let best = null;
+    heat.forEach((row, wd) => row.forEach((m, h) => { if (m > 0 && (!best || m > best.m)) best = { wd, h, m }; }));
+    res.json({ series, heat, roomMin, best: best ? { weekday: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][best.wd], hour: hourLabel(best.h), minutes: Math.round(best.m) } : null });
   });
 
   // ------------------------------------------------------------------ 6. weekly review
