@@ -707,3 +707,9 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 .badges b { display: block; }
 .badges small { display: block; color: inherit; opacity: .85; }
 .badges .when { color: var(--lichen); opacity: 1; font-weight: 600; margin-top: 2px; }
+
+/* ---------- sample people ---------- */
+.sample-pill { margin-left: 6px; background: color-mix(in srgb, var(--amber) 16%, var(--surface)); color: var(--amber); }
+.post.sample, .msg.sample, .people li.sample { opacity: .82; }
+.face.sample { outline: 2px dashed var(--amber); outline-offset: 1px; }
+.sample-em { position: absolute; top: 8px; left: 8px; font-style: normal; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 99px; background: rgba(176, 118, 26, .85); color: #fff; }

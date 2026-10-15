@@ -924,6 +924,24 @@ public class MainActivity extends Activity {
             fg.addView(ov);
         }
 
+        // keep running (Oppo/ColorOS and other strict battery savers)
+        boolean unrestricted = OemHelp.batteryUnrestricted(this);
+        if (OemHelp.aggressive() || !unrestricted) {
+            LinearLayout kr = ui.card(content, Tr.lang.equals("hi") ? "Synapse को चलता रहने दें" : "Keep Synapse running");
+            kr.addView(ui.body(OemHelp.steps(Tr.lang.equals("hi"))));
+            TextView st = ui.note((Tr.lang.equals("hi") ? "बैटरी: " : "Battery: ") + (unrestricted ? (Tr.lang.equals("hi") ? "प्रतिबंध नहीं ✓" : "unrestricted ✓") : (Tr.lang.equals("hi") ? "प्रतिबंधित" : "restricted")));
+            st.setTextColor(unrestricted ? p.lichen : p.amber);
+            kr.addView(st);
+            if (!unrestricted) {
+                Button bb = ui.button(Tr.lang.equals("hi") ? "बैटरी प्रतिबंध हटाएँ" : "Remove battery restriction", 0);
+                bb.setOnClickListener(v -> OemHelp.askBattery(this));
+                kr.addView(bb);
+            }
+            Button as = ui.button(Tr.lang.equals("hi") ? "ऑटो-स्टार्ट खोलें" : "Open auto-start", 1);
+            as.setOnClickListener(v -> OemHelp.openAutoStart(this));
+            kr.addView(as);
+        }
+
         // language
         LinearLayout lg = ui.card(content, Tr.t("Language"));
         LinearLayout lrow = ui.row();
