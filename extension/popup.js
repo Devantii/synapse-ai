@@ -9,7 +9,8 @@ async function render() {
   const sites = Object.entries(s.today).sort((a, b) => b[1] - a[1]);
   const total = sites.reduce((a, [, v]) => a + v, 0);
   $('#total').textContent = fmt(total);
-  $('#now').textContent = s.config.paused ? 'Paused: nothing is being measured.' : s.current ? `Measuring ${s.current.host}` : 'Not measuring right now (idle, unfocused or excluded).';
+  const focusLine = s.focus && s.config.blocking?.enabled ? ` Focus block on: distracting sites paused until ${new Date(s.focus.endsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
+  $('#now').textContent = (s.config.paused ? 'Paused: nothing is being measured.' : s.current ? `Measuring ${s.current.host}` : 'Not measuring right now (idle, unfocused or excluded).') + focusLine;
   $('#pause').textContent = s.config.paused ? 'Resume' : 'Pause';
   $('#pause').setAttribute('aria-pressed', String(!!s.config.paused));
   const max = sites[0]?.[1] || 1;

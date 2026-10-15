@@ -109,6 +109,7 @@ async function enterApp(isNew) {
   $('#who').textContent = state.me.user.displayName;
   connectSocket();
   foreground.sync();
+  timer.broadcast(); // re-sync a timer that was running before a reload
   if (isNew) {
     const dlg = $('#onboarding');
     $('[data-consent-host]', dlg).innerHTML = consentControls({ activity_tracking: 1, usage_tracking: 0, ai_insights: 0, community_profile: 1 });
@@ -237,6 +238,8 @@ const timer = {
   },
   broadcast() {
     state.socket?.emit('room:status', { focusing: this.s.running && this.s.mode === 'focus', focusEndsAt: this.s.running ? this.s.endsAt : null });
+    // Lets the browser extension pause distracting sites while a focus block runs.
+    if (state.token) api('PUT', '/focus/state', this.s.running ? { mode: this.s.mode, endsAt: this.s.endsAt } : { mode: null }).catch(() => {});
   },
 };
 setInterval(() => {

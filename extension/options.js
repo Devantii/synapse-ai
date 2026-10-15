@@ -13,6 +13,18 @@ async function load() {
   $('#key-hint').textContent = c.hasKey ? 'A key is saved. It is never shown again here.' : '';
   $('#disconnect').hidden = !c.hasKey;
   $('#excluded').value = (c.excluded || []).join('\n');
+  const b = c.blocking || { enabled: true, categories: ['social', 'entertainment', 'games'], sites: [] };
+  $('#block-on').checked = !!b.enabled;
+  $('#block-sites').value = (b.sites || []).join('\n');
+  const cats = $('#block-cats');
+  cats.querySelectorAll('label').forEach((l) => l.remove());
+  for (const [k, v] of Object.entries(CATEGORY_LABELS)) {
+    const l = document.createElement('label');
+    l.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:400;margin:0';
+    l.innerHTML = `<input type="checkbox" value="${k}" style="width:auto" ${b.categories.includes(k) ? 'checked' : ''} /> `;
+    l.append(v);
+    cats.append(l);
+  }
 
   const totals = {};
   for (const day of Object.values(state.totals)) for (const [h, s] of Object.entries(day)) totals[h] = (totals[h] || 0) + s;
@@ -54,6 +66,16 @@ $('#disconnect').addEventListener('click', async () => {
   await send({ type: 'disconnect' });
   show($('#conn-status'), 'Disconnected.', true);
   load();
+});
+$('#save-blocking').addEventListener('click', async () => {
+  await send({ type: 'saveBlocking', blocking: {
+    enabled: $('#block-on').checked,
+    categories: [...document.querySelectorAll('#block-cats input:checked')].map((i) => i.value),
+    sites: $('#block-sites').value.split('\n').map((s) => s.trim()).filter(Boolean),
+  } });
+  await load();
+  $('#save-blocking').textContent = 'Saved';
+  setTimeout(() => ($('#save-blocking').textContent = 'Save'), 1500);
 });
 $('#save-excluded').addEventListener('click', async () => {
   await send({ type: 'saveConfig', excluded: $('#excluded').value.split('\n').map((s) => s.trim()).filter(Boolean) });

@@ -14,6 +14,16 @@ Pin the extension to see today's totals, pause measuring, or sync on demand.
 
 In Synapse, **Privacy → Save screen-time data** must be on, or uploads are refused.
 
+## Pause distracting sites during focus
+
+While a focus block is running in Synapse (on any device), the extension pauses distracting sites: open tabs and new visits show a calm "paused until 10:25" page instead.
+
+- **What's paused:** Social media, Video & streaming and Games by default. Change the categories, or add specific sites, in Settings.
+- **Escape hatch:** **Open for 5 minutes** is always there. Breaks and idle time never pause anything.
+- **When it ends:** paused tabs reopen automatically when the block finishes.
+- **How it knows:** the extension checks Synapse every 30 seconds, so a block can take up to 30 seconds to kick in.
+- **Requirement:** it needs the extension connected to your Synapse account. Your Synapse dashboard itself is never paused.
+
 ## What counts as time
 
 A second is credited to a site only when all of these are true:

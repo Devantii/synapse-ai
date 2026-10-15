@@ -61,6 +61,13 @@ router.get('/ping', (req, res) => {
   res.json({ ok: true, user: req.device.display_name, device: req.device.name, kind: req.device.kind, usageConsent: consentOn(req.device.user_id) });
 });
 
+// GET /api/device/focus -> { focusing, endsAt } so the extension knows when to pause distracting sites.
+router.get('/focus', (req, res) => {
+  const row = db.prepare('SELECT mode, ends_at FROM focus_state WHERE user_id = ?').get(req.device.user_id);
+  const focusing = !!row && row.mode === 'focus' && row.ends_at > Date.now();
+  res.json({ focusing, endsAt: focusing ? row.ends_at : null, mode: row && row.ends_at > Date.now() ? row.mode : null });
+});
+
 /**
  * PUT /api/device/usage
  * { days: [{ day: 'YYYY-MM-DD', entries: [{ app, category, minutes }] }] }

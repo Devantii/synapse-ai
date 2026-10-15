@@ -6,13 +6,15 @@
 // What it sends: daily per-site minutes, to the Synapse server you configure, with a revocable device key.
 import { categorize } from './categories.js';
 
-const TICK_MIN = 1;          // checkpoint at least once a minute
+const TICK_MIN = 0.5;        // checkpoint (and check focus state) every 30 s
 const SYNC_MIN = 5;          // upload every 5 minutes
 const MAX_GAP_S = 120;       // never credit more than 2 min for a single unobserved gap (sleep, crashes)
 const IDLE_S = 60;
 const KEEP_DAYS = 30;
 const SYNC_DAYS = 7;
-const DEFAULT_CONFIG = { server: '', key: '', paused: false, excluded: [], overrides: {} };
+const DEFAULT_BLOCKING = { enabled: true, categories: ['social', 'entertainment', 'games'], sites: [] };
+const DEFAULT_CONFIG = { server: '', key: '', paused: false, excluded: [], overrides: {}, blocking: DEFAULT_BLOCKING };
+const ALLOW_MIN = 5;
 
 // Serialise all state changes: Chrome can fire several events at once and storage writes would race.
 let queue = Promise.resolve();
@@ -22,8 +24,10 @@ const pad = (n) => String(n).padStart(2, '0');
 const localDay = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
 async function load() {
-  const s = await chrome.storage.local.get(['config', 'totals', 'current', 'status']);
-  return { config: { ...DEFAULT_CONFIG, ...(s.config || {}) }, totals: s.totals || {}, current: s.current || null, status: s.status || {} };
+  const s = await chrome.storage.local.get(['config', 'totals', 'current', 'status', 'focus', 'allowUntil']);
+  const config = { ...DEFAULT_CONFIG, ...(s.config || {}) };
+  config.blocking = { ...DEFAULT_BLOCKING, ...(config.blocking || {}) };
+  return { config, totals: s.totals || {}, current: s.current || null, status: s.status || {}, focus: s.focus || null, allowUntil: s.allowUntil || {} };
 }
 
 export function hostOf(url) {
@@ -157,15 +161,63 @@ async function ensureAlarms() {
   if (!existing.some((a) => a.name === 'sync')) chrome.alarms.create('sync', { periodInMinutes: SYNC_MIN, delayInMinutes: 1 });
 }
 
+// ---------------- focus-mode blocking ----------------
+const focusActive = (focus) => !!focus?.focusing && focus.endsAt > Date.now();
+
+function shouldBlock(host, s) {
+  const b = s.config.blocking;
+  if (!b.enabled || !focusActive(s.focus) || !host) return false;
+  if ((s.allowUntil[host] || 0) > Date.now()) return false;
+  if (isExcluded(host, s.config)) return false; // never block the Synapse dashboard or ignored sites
+  if ((b.sites || []).some((x) => host === x || host.endsWith('.' + x))) return true;
+  return (b.categories || []).includes(categorize(host, s.config.overrides));
+}
+
+async function enforce(tab, s) {
+  if (!tab?.id || tab.incognito) return;
+  const url = tab.url || tab.pendingUrl || '';
+  const host = hostOf(url);
+  if (!shouldBlock(host, s)) return;
+  const page = chrome.runtime.getURL('blocked.html') +
+    `?host=${encodeURIComponent(host)}&until=${s.focus.endsAt}&url=${encodeURIComponent(url)}`;
+  await chrome.tabs.update(tab.id, { url: page }).catch(() => {});
+}
+
+async function enforceAll() {
+  const s = await load();
+  if (!focusActive(s.focus) || !s.config.blocking.enabled) return;
+  for (const tab of await chrome.tabs.query({})) await enforce(tab, s);
+}
+
+/** Ask Synapse whether a focus block is running. Pauses open distracting tabs when one starts. */
+async function refreshFocus() {
+  const s = await load();
+  if (!s.config.server || !s.config.key || !s.config.blocking.enabled) return s.focus;
+  try {
+    const f = await request(s.config.server, s.config.key, 'GET', '/api/device/focus');
+    const focus = { focusing: !!f.focusing, endsAt: f.endsAt, checkedAt: Date.now() };
+    const started = focusActive(focus) && !focusActive(s.focus);
+    await chrome.storage.local.set({ focus });
+    if (started) await enforceAll();
+    return focus;
+  } catch {
+    return s.focus; // offline: keep the last known block until it expires on its own
+  }
+}
+
 // ---------------- events ----------------
 chrome.idle.setDetectionInterval(IDLE_S);
 chrome.idle.onStateChanged.addListener(() => checkpoint());
 chrome.tabs.onActivated.addListener(() => checkpoint());
-chrome.tabs.onUpdated.addListener((tabId, info, tab) => { if (tab.active && (info.url || info.status === 'complete')) checkpoint(); });
+chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
+  if (info.url) await enforce(tab, await load());
+  if (tab.active && (info.url || info.status === 'complete')) checkpoint();
+});
 chrome.tabs.onRemoved.addListener(() => checkpoint());
 chrome.windows.onFocusChanged.addListener(() => checkpoint());
 chrome.alarms.onAlarm.addListener(async (a) => {
   await checkpoint();
+  if (a.name === 'tick') await refreshFocus();
   if (a.name === 'sync') await sync();
 });
 chrome.runtime.onStartup.addListener(() => { ensureAlarms(); checkpoint(); });
@@ -184,11 +236,33 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         await checkpoint();
         const s = await load();
         const { key, ...safeConfig } = s.config;
-        return reply({ config: { ...safeConfig, hasKey: !!key }, today: s.totals[localDay(Date.now())] || {}, totals: s.totals, current: s.current, status: s.status });
+        return reply({ config: { ...safeConfig, hasKey: !!key }, today: s.totals[localDay(Date.now())] || {}, totals: s.totals, current: s.current, status: s.status, focus: focusActive(s.focus) ? s.focus : null });
       }
       case 'sync':
         await checkpoint();
+        await refreshFocus();
         return reply(await sync());
+      case 'allowTemp': {
+        const host = hostOf('https://' + String(msg.host || ''));
+        if (!host) return reply({ ok: false });
+        const { allowUntil = {} } = await chrome.storage.local.get('allowUntil');
+        for (const [h, t] of Object.entries(allowUntil)) if (t < Date.now()) delete allowUntil[h];
+        allowUntil[host] = Date.now() + ALLOW_MIN * 60000;
+        await chrome.storage.local.set({ allowUntil });
+        return reply({ ok: true, until: allowUntil[host] });
+      }
+      case 'saveBlocking': {
+        const s = await load();
+        const b = msg.blocking || {};
+        const blocking = {
+          enabled: !!b.enabled,
+          categories: (b.categories || []).filter((c) => typeof c === 'string'),
+          sites: (b.sites || []).map((h) => hostOf('https://' + String(h).replace(/^https?:\/\//, '')) || '').filter(Boolean),
+        };
+        await chrome.storage.local.set({ config: { ...s.config, blocking } });
+        if (blocking.enabled) { await refreshFocus(); await enforceAll(); }
+        return reply({ ok: true });
+      }
       case 'setPaused': {
         await checkpoint();
         const s = await load();
@@ -232,5 +306,5 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 });
 
 // Debug/test hook (only reachable from the extension's own devtools).
-self.synapse = { checkpoint, sync, load, buildPayload };
+self.synapse = { checkpoint, sync, load, buildPayload, refreshFocus, enforceAll };
 ensureAlarms();

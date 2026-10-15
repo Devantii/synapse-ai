@@ -18,6 +18,17 @@
   </section>
 
   <section>
+    <h2>Pause distracting sites during focus</h2>
+    <p class="muted">While a focus block is running in Synapse, these sites show a short "paused" page instead. You can always open one for 5 minutes. Needs a connected Synapse account.</p>
+    <label style="display:flex;gap:10px;align-items:center;font-weight:600"><input type="checkbox" id="block-on" style="width:auto" /> Pause sites during focus blocks</label>
+    <fieldset id="block-cats" style="border:0;padding:0;margin:0 0 12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">
+      <legend style="font-weight:600;font-size:13px;margin-bottom:6px">Categories to pause</legend>
+    </fieldset>
+    <label>Also pause these sites <small>One per line, e.g. amazon.in</small><textarea id="block-sites" rows="3" placeholder="amazon.in"></textarea></label>
+    <button id="save-blocking">Save</button>
+  </section>
+
+  <section>
     <h2>Sites to ignore</h2>
     <p class="muted">One per line. Subdomains are included, so <code>example.com</code> also ignores <code>app.example.com</code>. Your Synapse dashboard is always ignored because it measures itself.</p>
     <label><textarea id="excluded" rows="4" placeholder="bank.example.com"></textarea></label>

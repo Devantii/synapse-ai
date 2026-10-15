@@ -126,6 +126,14 @@ CREATE TABLE IF NOT EXISTS device_tokens (
   revoked_at   TEXT
 );
 
+-- The running timer, so the browser extension can pause distracting sites during focus blocks.
+CREATE TABLE IF NOT EXISTS focus_state (
+  user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  mode       TEXT,               -- 'focus', 'break' or NULL when idle
+  ends_at    INTEGER,            -- epoch milliseconds
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS rooms (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,

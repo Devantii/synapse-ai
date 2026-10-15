@@ -155,6 +155,23 @@ router.get('/sessions', (req, res) => {
   res.json(rows);
 });
 
+// Current timer state (lets the browser extension block distracting sites during focus).
+router.put('/focus/state', (req, res) => {
+  const mode = req.body.mode === 'focus' || req.body.mode === 'break' ? req.body.mode : null;
+  let endsAt = null;
+  if (mode) {
+    endsAt = Number(req.body.endsAt);
+    const now = Date.now();
+    if (!Number.isFinite(endsAt) || endsAt < now - 60000 || endsAt > now + 125 * 60000)
+      throw new HttpError(400, 'endsAt must be within the next 2 hours.');
+  }
+  db.prepare(
+    `INSERT INTO focus_state (user_id, mode, ends_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET mode = excluded.mode, ends_at = excluded.ends_at, updated_at = datetime('now')`
+  ).run(req.user.id, mode, endsAt);
+  res.json({ ok: true });
+});
+
 // ---------- screen time ----------
 router.put('/usage', requireConsent('usage_tracking', 'Save screen-time data'), (req, res) => {
   const day = validDay(req.body.day);
@@ -360,6 +377,7 @@ router.delete('/data', (req, res) => {
       db.prepare('DELETE FROM trees WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM milestones WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM rewards WHERE user_id = ?').run(id);
+      db.prepare('DELETE FROM focus_state WHERE user_id = ?').run(id);
     },
     usage: () => db.prepare('DELETE FROM app_usage WHERE user_id = ?').run(id),
     wellbeing: () => db.prepare('DELETE FROM mood_checkins WHERE user_id = ?').run(id),

@@ -258,6 +258,19 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('DELETE', '/api/devices/' + r2.data.id, null, A)).status === 200);
     assert((await devApi('GET', '/api/device/ping', null, r2.data.token)).status === 401);
   });
+  await test('focus state drives device focus endpoint', async () => {
+    let f = await api('GET', '/api/device/focus', null, devToken);
+    assert(f.data.focusing === false);
+    const endsAt = Date.now() + 25 * 60000;
+    assert((await api('PUT', '/api/focus/state', { mode: 'focus', endsAt }, A)).status === 200);
+    f = await api('GET', '/api/device/focus', null, devToken);
+    assert(f.data.focusing === true && f.data.endsAt === endsAt);
+    await api('PUT', '/api/focus/state', { mode: 'break', endsAt }, A);
+    assert((await api('GET', '/api/device/focus', null, devToken)).data.focusing === false, 'break is not focus');
+    await api('PUT', '/api/focus/state', { mode: null }, A);
+    assert((await api('GET', '/api/device/focus', null, devToken)).data.focusing === false);
+    assert((await api('PUT', '/api/focus/state', { mode: 'focus', endsAt: Date.now() + 10 * 3600000 }, A)).status === 400);
+  });
   await test('voice endpoint falls back to mesh without LiveKit', async () => {
     const r = await api('GET', '/api/rooms/deep-work/voice', null, A);
     assert(r.data.mode === 'mesh');
