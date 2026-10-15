@@ -33,26 +33,19 @@ function speciesFor(minutes) {
   return 'sapling';
 }
 
-function ensureRow(userId) {
-  db.prepare('INSERT OR IGNORE INTO rewards (user_id) VALUES (?)').run(userId);
-  return db.prepare('SELECT * FROM rewards WHERE user_id = ?').get(userId);
+async function ensureRow(userId, q = db, lock = false) {
+  await q.run('INSERT INTO rewards (user_id) VALUES (?) ON CONFLICT DO NOTHING', [userId]);
+  return q.get('SELECT * FROM rewards WHERE user_id = ?' + (lock ? db.forUpdate : ''), [userId]);
 }
 
 function dayDiff(a, b) {
   return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
 }
 
-function grant(userId, code, out) {
-  const r = db.prepare('INSERT OR IGNORE INTO milestones (user_id, code) VALUES (?, ?)').run(userId, code);
+/** Record a milestone once; pushes it to `out` if it's new. Pass the transaction handle as `q` inside a tx. */
+async function grant(userId, code, out, q = db) {
+  const r = await q.run('INSERT INTO milestones (user_id, code) VALUES (?, ?) ON CONFLICT DO NOTHING', [userId, code]);
   if (r.changes) out.push(MILESTONES.find((m) => m.code === code));
-}
-
-function pointsEarnedToday(userId, day) {
-  // Recompute from sessions on that local day so the cap is robust.
-  const rows = db.prepare(
-    `SELECT kind, actual_min, completed FROM focus_sessions WHERE user_id = ? AND day = ?`
-  ).all(userId, day);
-  return rows.reduce((s, r) => s + pointsForSession(r), 0);
 }
 
 function pointsForSession({ kind, actual_min, completed }) {
@@ -61,67 +54,83 @@ function pointsForSession({ kind, actual_min, completed }) {
   return actual_min >= 5 ? Math.floor(actual_min / 2) : 0;
 }
 
+async function pointsEarnedToday(userId, day, q) {
+  // Recompute from sessions on that local day so the cap is robust.
+  const rows = await q.all('SELECT kind, actual_min, completed FROM focus_sessions WHERE user_id = ? AND day = ?', [userId, day]);
+  return rows.reduce((s, r) => s + pointsForSession(r), 0);
+}
+
 /**
- * Apply rewards for a just-saved session. `day` is the user's local YYYY-MM-DD.
- * Returns what changed so the UI can celebrate it.
+ * Save a session and apply its rewards in one transaction. `day` is the user's local YYYY-MM-DD.
+ * Returns the new session id plus what changed so the UI can celebrate it.
  */
-const applySession = db.transaction((userId, session, day) => {
-  const before = ensureRow(userId);
-  const already = pointsEarnedToday(userId, day) - pointsForSession(session); // session already inserted
-  let earned = pointsForSession(session);
-  const room = Math.max(0, DAILY_POINT_CAP - already);
-  const capped = earned > room;
-  earned = Math.min(earned, room);
+function recordSession(userId, session) {
+  return db.tx(async (t) => {
+    // Lock this user's rewards row first so parallel saves are applied one after another.
+    const before = await ensureRow(userId, t, true);
+    const id = await t.insert(
+      `INSERT INTO focus_sessions (user_id, kind, planned_min, actual_min, completed, tag, day, started_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, session.kind, session.planned_min, session.actual_min, session.completed, session.tag, session.day, session.started_at, session.ended_at]
+    );
+    const day = session.day;
+    const already = (await pointsEarnedToday(userId, day, t)) - pointsForSession(session); // session already inserted
+    let earned = pointsForSession(session);
+    const room = Math.max(0, DAILY_POINT_CAP - already);
+    const capped = earned > room;
+    earned = Math.min(earned, room);
 
-  const newMilestones = [];
-  let tree = null;
-  let { current_streak, best_streak, last_focus_day, trees } = before;
+    const newMilestones = [];
+    let tree = null;
+    let { current_streak, best_streak, last_focus_day, trees } = before;
 
-  if (session.kind === 'focus' && session.completed) {
-    if (last_focus_day !== day) {
-      const gap = last_focus_day ? dayDiff(last_focus_day, day) : null;
-      current_streak = gap === 1 ? current_streak + 1 : gap !== null && gap <= 0 ? current_streak : 1;
-      last_focus_day = gap !== null && gap < 0 ? last_focus_day : day;
+    if (session.kind === 'focus' && session.completed) {
+      if (last_focus_day !== day) {
+        const gap = last_focus_day ? dayDiff(last_focus_day, day) : null;
+        current_streak = gap === 1 ? current_streak + 1 : gap !== null && gap <= 0 ? current_streak : 1;
+        last_focus_day = gap !== null && gap < 0 ? last_focus_day : day;
+      }
+      best_streak = Math.max(best_streak, current_streak);
+      if (session.actual_min >= 20) {
+        const species = speciesFor(session.actual_min);
+        tree = { id: await t.insert('INSERT INTO trees (user_id, species) VALUES (?, ?)', [userId, species]), species };
+        trees += 1;
+      }
+      await grant(userId, 'first_focus', newMilestones, t);
     }
-    best_streak = Math.max(best_streak, current_streak);
-    if (session.actual_min >= 20) {
-      const species = speciesFor(session.actual_min);
-      const r = db.prepare('INSERT INTO trees (user_id, species) VALUES (?, ?)').run(userId, species);
-      tree = { id: r.lastInsertRowid, species };
-      trees += 1;
-    }
-    grant(userId, 'first_focus', newMilestones);
-  }
-  if (session.kind === 'break' && session.completed) grant(userId, 'first_break', newMilestones);
+    if (session.kind === 'break' && session.completed) await grant(userId, 'first_break', newMilestones, t);
 
-  const points = before.points + earned;
-  db.prepare(
-    `UPDATE rewards SET points=?, trees=?, current_streak=?, best_streak=?, last_focus_day=? WHERE user_id=?`
-  ).run(points, trees, current_streak, best_streak, last_focus_day, userId);
+    const points = before.points + earned;
+    await t.run(
+      'UPDATE rewards SET points = ?, trees = ?, current_streak = ?, best_streak = ?, last_focus_day = ? WHERE user_id = ?',
+      [points, trees, current_streak, best_streak, last_focus_day, userId]
+    );
 
-  if (trees >= 5) grant(userId, 'trees_5', newMilestones);
-  if (trees >= 25) grant(userId, 'trees_25', newMilestones);
-  if (current_streak >= 3) grant(userId, 'streak_3', newMilestones);
-  if (current_streak >= 7) grant(userId, 'streak_7', newMilestones);
-  if (levelFor(points).level >= 5) grant(userId, 'level_5', newMilestones);
+    if (trees >= 5) await grant(userId, 'trees_5', newMilestones, t);
+    if (trees >= 25) await grant(userId, 'trees_25', newMilestones, t);
+    if (current_streak >= 3) await grant(userId, 'streak_3', newMilestones, t);
+    if (current_streak >= 7) await grant(userId, 'streak_7', newMilestones, t);
+    if (levelFor(points).level >= 5) await grant(userId, 'level_5', newMilestones, t);
 
-  const today = db.prepare(
-    `SELECT SUM(kind='focus' AND completed=1) f, SUM(kind='break' AND completed=1) b
-       FROM focus_sessions WHERE user_id=? AND day=?`
-  ).get(userId, day);
-  if ((today.f || 0) >= 4 && (today.b || 0) >= 3) grant(userId, 'balanced_day', newMilestones);
+    const today = await t.get(
+      `SELECT SUM(CASE WHEN kind = 'focus' AND completed = 1 THEN 1 ELSE 0 END) AS f,
+              SUM(CASE WHEN kind = 'break' AND completed = 1 THEN 1 ELSE 0 END) AS b
+         FROM focus_sessions WHERE user_id = ? AND day = ?`,
+      [userId, day]
+    );
+    if ((today.f || 0) >= 4 && (today.b || 0) >= 3) await grant(userId, 'balanced_day', newMilestones, t);
 
-  const leveledUp = levelFor(points).level > levelFor(before.points).level;
-  return { earned, capped, tree, newMilestones, leveledUp };
-});
+    const leveledUp = levelFor(points).level > levelFor(before.points).level;
+    return { id, earned, capped, tree, newMilestones, leveledUp };
+  });
+}
 
-function summary(userId) {
-  const r = ensureRow(userId);
-  // A streak only counts as current if the last focus day was today or yesterday (UTC tolerance).
+async function summary(userId) {
+  const r = await ensureRow(userId);
   const lvl = levelFor(r.points);
-  const achieved = db.prepare('SELECT code, achieved_at FROM milestones WHERE user_id = ?').all(userId);
+  const achieved = await db.all('SELECT code, achieved_at FROM milestones WHERE user_id = ?', [userId]);
   const map = Object.fromEntries(achieved.map((a) => [a.code, a.achieved_at]));
-  const garden = db.prepare('SELECT id, species, planted_at FROM trees WHERE user_id = ? ORDER BY id').all(userId);
+  const garden = await db.all('SELECT id, species, planted_at FROM trees WHERE user_id = ? ORDER BY id', [userId]);
   return {
     points: r.points,
     ...lvl,
@@ -135,4 +144,4 @@ function summary(userId) {
   };
 }
 
-module.exports = { applySession, summary, grant, levelFor, MILESTONES };
+module.exports = { recordSession, summary, grant, levelFor, MILESTONES };

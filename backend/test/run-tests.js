@@ -1,5 +1,7 @@
 // End-to-end API + realtime tests against a throwaway database.
-// Run: npm test
+// Run: npm test                      (SQLite in a temp folder)
+//      TEST_DATABASE_URL=postgres://... npm test   (a Postgres database that will be WIPED)
+// Tests never read DATABASE_URL, so your real database in .env is never touched.
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -7,9 +9,13 @@ const os = require('os');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'synapse-test-'));
 process.env.DB_PATH = path.join(tmp, 'test.db');
 process.env.JWT_SECRET = 'test-secret';
-delete process.env.OPENAI_API_KEY;
+process.env.NODE_ENV = 'test';
+// An empty string (not undefined) stops dotenv from filling DATABASE_URL in from .env.
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || '';
+process.env.OPENAI_API_KEY = '';
+process.env.LIVEKIT_URL = '';
 
-const { server } = require('../src/server');
+const { server, ready, db } = require('../src/server');
 const { io: ioc } = require('socket.io-client');
 
 let base;
@@ -33,6 +39,9 @@ const localDay = (offset = 0) => { const d = new Date(Date.now() + offset * 8640
 const ts = (day, hh) => `${day}T${hh}:00`;
 
 (async () => {
+  await ready;
+  await db.resetForTests();
+  console.log(`Database: ${db.describe()}`);
   await new Promise((r) => server.listen(0, r));
   base = `http://localhost:${server.address().port}`;
   const today = localDay();
@@ -276,10 +285,30 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert(r.data.mode === 'mesh');
   });
 
+  console.log('Daily limits');
+  await test('set, update, list with today\'s usage, delete', async () => {
+    // instagram.com 210 (extension) overshadows typed Instagram 180, see overlap rule
+    let r = await api('PUT', '/api/limits', { app: 'https://www.instagram.com/feed', minutes: 240 }, A);
+    assert(r.status === 200 && r.data.app === 'instagram.com', JSON.stringify(r.data));
+    await api('PUT', '/api/limits', { app: 'instagram.com', minutes: 300 }, A); // update, not duplicate
+    await api('PUT', '/api/limits', { app: 'YouTube', minutes: 60 }, A);
+    r = await api('GET', '/api/limits?day=' + today, null, A);
+    const insta = r.data.limits.find((l) => l.app === 'instagram.com');
+    const yt = r.data.limits.find((l) => l.app === 'YouTube');
+    assert(r.data.limits.length === 2 && insta.minutes === 300, JSON.stringify(r.data));
+    assert(insta.used === 210 && yt.used === 150 && yt.ratio === 2.5, JSON.stringify(r.data.limits));
+    const dev = await api('GET', '/api/device/limits', null, devToken);
+    assert(dev.data.limits.length === 2 && dev.data.limits.every((l) => l.app && l.minutes), 'device sees limits');
+    assert((await api('PUT', '/api/limits', { app: 'x', minutes: 1 }, A)).status === 400, 'min 5 minutes');
+    assert((await api('DELETE', '/api/limits/' + yt.id, null, B)).status === 404, 'bob deleted alice limit');
+    assert((await api('DELETE', '/api/limits/' + yt.id, null, A)).status === 200);
+    assert((await api('GET', '/api/limits', null, B)).data.limits.length === 0, 'limits are private');
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);
-    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 3 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 2);
+    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 3 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 2 && r.data.dailyLimits.length === 1);
     const rb = await api('GET', '/api/export', null, B);
     assert(rb.data.focusSessions.length === 0 && rb.data.communityPosts.length === 0);
   });
@@ -300,6 +329,7 @@ const ts = (day, hh) => `${day}T${hh}:00`;
 
   console.log(`\n${passed} passed, ${failed} failed`);
   server.close();
+  await db.close();
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(failed ? 1 : 0);
 })();

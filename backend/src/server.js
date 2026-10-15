@@ -66,9 +66,21 @@ app.get('/vendor/livekit-client.umd.js', (req, res) =>
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 
+const db = require('./db');
 const PORT = Number(process.env.PORT) || 3000;
+const ready = db.init();
+
 if (require.main === module) {
-  server.listen(PORT, () => console.log(`Synapse AI running at http://localhost:${PORT}`));
+  ready
+    .then(() => server.listen(PORT, () => console.log(`Synapse AI running at http://localhost:${PORT} (database: ${db.describe()})`)))
+    .catch((e) => {
+      console.error(`FATAL: could not open the database (${db.describe()}): ${e.message}`);
+      if (db.dialect === 'postgres') console.error('Check DATABASE_URL. Hosted databases often need ?sslmode=require at the end of the URL.');
+      process.exit(1);
+    });
+  const shutdown = () => server.close(() => db.close().finally(() => process.exit(0)));
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
-module.exports = { app, server, io };
+module.exports = { app, server, io, ready, db };

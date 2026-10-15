@@ -21,8 +21,8 @@ function attach(io) {
     }
   });
 
-  const roomExists = db.prepare('SELECT 1 FROM rooms WHERE id = ?');
-  const insertMsg = db.prepare('INSERT INTO room_messages (room_id, user_id, body) VALUES (?, ?, ?)');
+  const roomExists = async (id) => !!(await db.get('SELECT 1 AS ok FROM rooms WHERE id = ?', [id]));
+  const insertMsg = (roomId, userId, body) => db.insert('INSERT INTO room_messages (room_id, user_id, body) VALUES (?, ?, ?)', [roomId, userId, body]);
 
   // Simple per-socket flood control for chat.
   const lastMsgs = new Map();
@@ -52,10 +52,16 @@ function attach(io) {
   io.on('connection', (socket) => {
     members.set(socket.id, { userId: socket.user.id, name: socket.user.name, roomId: null, focusing: false, focusEndsAt: null, audio: false, muted: false });
 
-    socket.on('room:join', ({ roomId } = {}, ack) => {
-      if (typeof roomId !== 'string' || !roomExists.get(roomId)) return ack?.({ error: 'Room not found.' });
-      leave(socket);
+    socket.on('room:join', async ({ roomId } = {}, ack) => {
+      try {
+        if (typeof roomId !== 'string' || !(await roomExists(roomId))) return ack?.({ error: 'Room not found.' });
+      } catch (e) {
+        console.error('[rooms] join failed:', e.message);
+        return ack?.({ error: 'Could not join right now. Try again.' });
+      }
       const m = members.get(socket.id);
+      if (!m) return; // disconnected meanwhile
+      leave(socket);
       m.roomId = roomId;
       socket.join(roomId);
       broadcastPresence(roomId);
@@ -68,15 +74,22 @@ function attach(io) {
       ack?.({ ok: true });
     });
 
-    socket.on('room:message', ({ body } = {}, ack) => {
+    socket.on('room:message', async ({ body } = {}, ack) => {
       const m = members.get(socket.id);
       const text = typeof body === 'string' ? body.trim() : '';
       if (!m?.roomId) return ack?.({ error: 'Join a room first.' });
       if (!text || text.length > 500) return ack?.({ error: 'Messages must be 1-500 characters.' });
       if (!allowMessage(socket.id)) return ack?.({ error: 'Slow down a little.' });
-      const r = insertMsg.run(m.roomId, m.userId, text);
-      const msg = { id: r.lastInsertRowid, body: text, author: m.name, userId: m.userId, created_at: new Date().toISOString().replace('T', ' ').slice(0, 19) };
-      io.to(m.roomId).emit('room:message', msg);
+      const roomId = m.roomId;
+      let id;
+      try {
+        id = await insertMsg(roomId, m.userId, text);
+      } catch (e) {
+        console.error('[rooms] message save failed:', e.message);
+        return ack?.({ error: 'Message not sent. Try again.' });
+      }
+      const msg = { id, body: text, author: m.name, userId: m.userId, created_at: new Date().toISOString().replace('T', ' ').slice(0, 19) };
+      io.to(roomId).emit('room:message', msg);
       ack?.({ ok: true });
     });
 

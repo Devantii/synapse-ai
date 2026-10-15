@@ -2,7 +2,7 @@
 
 A digital burnout prevention system: Pomodoro focus timer with restorative breaks, a growing tree garden, live focus rooms with chat and optional voice, a supportive community feed, screen-time logging, and explainable wellbeing insights from a machine-learning model plus fuzzy logic.
 
-One Node.js server (Express + Socket.IO + SQLite) serves both the API and the responsive web dashboard, so there is a single URL and no separate frontend build. A browser extension and a Windows desktop tracker add automatic screen-time measurement, and an optional LiveKit server scales voice rooms.
+One Node.js server (Express + Socket.IO, with PostgreSQL or SQLite) serves both the API and the responsive web dashboard, so there is a single URL and no separate frontend build. A browser extension and a Windows desktop tracker add automatic screen-time measurement, and an optional LiveKit server scales voice rooms.
 
 ```
 synapse-ai/
@@ -12,7 +12,7 @@ synapse-ai/
 └── backend/
     ├── src/
     │   ├── server.js        Express app, security headers, static dashboard, ICE config
-    │   ├── db.js            SQLite schema (users, consents, sessions, usage, posts, rooms…)
+    │   ├── db.js            database layer: PostgreSQL (DATABASE_URL) or SQLite, one portable schema
     │   ├── auth.js          bcrypt passwords + signed JWT sessions
     │   ├── routes.js        REST API, validation, consent gates, export & deletion
     │   ├── gamification.js  points, levels, streaks, trees, milestones, daily point cap
@@ -23,7 +23,7 @@ synapse-ai/
     │   ├── usage.js         merges overlapping screen-time sources so time counts once
     │   └── voice.js         LiveKit join tokens (or peer-to-peer fallback)
     ├── public/              dashboard (index.html, styles.css, app.js — plain ES modules)
-    ├── test/run-tests.js    end-to-end API + realtime tests (37 checks)
+    ├── test/run-tests.js    end-to-end API + realtime tests (38 checks, SQLite or Postgres)
     └── .env.example
 ```
 
@@ -45,7 +45,7 @@ Other commands:
 - `npm run dev` restarts the server when files change.
 - `npm test` runs the end-to-end suite against a throwaway database.
 
-The database is created automatically at `backend/data.db`. Delete that file to start fresh.
+The database is created automatically. Locally that's a SQLite file at `backend/data.db` (delete it to start fresh); set `DATABASE_URL` to use PostgreSQL instead (see Database below).
 
 **Windows note:** the SQLite driver (`better-sqlite3`) ships prebuilt binaries for current Node LTS versions on Windows, macOS and Linux, so no compiler is needed. If `npm install` ever tries to compile it, you are probably on a very new or odd Node version; switch to the current LTS.
 
@@ -58,7 +58,9 @@ Set these in `backend/.env` (see `.env.example`). Keep `.env` out of source cont
 | `JWT_SECRET` | **Required in production** | Signs login tokens. Use a long random string. Unset in development = random secret, so logins reset on restart. The server refuses to start with `NODE_ENV=production` and no secret. |
 | `NODE_ENV` | Production | Set to `production` when hosting. |
 | `PORT` | Optional | Defaults to 3000. |
-| `DB_PATH` | Optional | SQLite file location. Use a persistent disk when hosting. |
+| `DATABASE_URL` | Recommended when hosting | PostgreSQL connection string. When set, it's used instead of SQLite. Tables are created on first start. |
+| `DATABASE_SSL` | Rarely | Set to `no-verify` only if your provider uses a self-signed certificate. |
+| `DB_PATH` | Optional | SQLite file location when `DATABASE_URL` isn't set. |
 | `OPENAI_API_KEY` | Optional | Enables AI-written coach replies. Without it the coach replies from your insights and says so. |
 | `OPENAI_MODEL`, `OPENAI_BASE_URL` | Optional | Any OpenAI-compatible Chat Completions endpoint. |
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Optional | Run voice through a LiveKit media server (large rooms, more networks). Unset = peer-to-peer. See `infra/livekit/README.md`. |
@@ -111,14 +113,30 @@ Each upload replaces that device type's earlier totals for those days, so re-sen
 
 The ML model is trained when the server starts, on 4,000 synthetic profiles labelled by a scoring function built from common burnout-risk heuristics (long screen hours, few breaks, late sessions, short sleep, high stress). It fits that labelling with about 75% accuracy. That makes it a consistent, explainable coaching heuristic. It is not trained on clinical data and must not be presented as a validated burnout or mental-health assessment; the dashboard says so wherever scores appear. With real, consented outcome data you could retrain it in `analytics.js` (`trainModel`).
 
+## Database
+
+| | When | Notes |
+|---|---|---|
+| SQLite | `DATABASE_URL` not set (default) | Zero setup; perfect for running on your own computer. |
+| PostgreSQL | `DATABASE_URL` set | For hosting: data survives restarts and redeploys. Any Postgres 12+ works. |
+
+**Free hosted Postgres that doesn't expire: Neon**
+1. Sign up at https://neon.com (no card) and create a project.
+2. Copy the connection string; it looks like `postgresql://user:pass@ep-xxx.aws.neon.tech/neondb?sslmode=require`.
+3. Set it as `DATABASE_URL`, either in `backend/.env` or on Render under the service's **Environment** tab. If you deployed with the blueprint, also delete the `synapse-db` database there, since a manually set value replaces the linked one.
+
+Tests: `npm test` uses a temporary SQLite file. `TEST_DATABASE_URL=postgres://... npm test` runs the same 38 checks against Postgres. That database is wiped, and `DATABASE_URL` is never used by tests.
+
 ## Deploy (one click, Render)
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Devantii/synapse-ai)
 
-`render.yaml` sets everything up: Node 22, production mode, a generated `JWT_SECRET`, and the health check. After it deploys, add `OPENAI_API_KEY` or the `LIVEKIT_*` variables under the service's **Environment** tab if you want them.
+`render.yaml` sets everything up: the web service, a free PostgreSQL database wired in as `DATABASE_URL`, Node 22, production mode, a generated `JWT_SECRET`, and the health check. After it deploys, add `OPENAI_API_KEY` or the `LIVEKIT_*` variables under the service's **Environment** tab if you want them.
 
-The free plan has no persistent disk, so accounts and data reset whenever the service restarts or redeploys. It also sleeps after about 15 idle minutes and takes 30-60 seconds to wake. For a real deployment, use the Starter plan and uncomment the disk lines in `render.yaml`.
+Free plan limits:
+- **Database expiry:** Render's free Postgres expires after 30 days (14-day grace to upgrade). Switch to Neon (above) for a free database that lasts.
+- **Sleeping:** the free web service sleeps after about 15 idle minutes and takes 30-60 seconds to wake.
 
 ## Hosting
 
-Any Node host with a persistent disk works (Render, Railway, Fly.io, a VPS). Set `NODE_ENV=production`, `JWT_SECRET`, `DB_PATH` on the persistent disk, and `TRUST_PROXY=1` behind a proxy. Serve over HTTPS: browsers only allow microphone access on HTTPS or `localhost`. SQLite suits a single server instance; for several instances, move to Postgres and add the Socket.IO Redis adapter.
+Any Node host with a persistent disk works (Render, Railway, Fly.io, a VPS). Set `NODE_ENV=production`, `JWT_SECRET`, `DB_PATH` on the persistent disk, and `TRUST_PROXY=1` behind a proxy. Serve over HTTPS: browsers only allow microphone access on HTTPS or `localhost`. With PostgreSQL you can run several instances; add the Socket.IO Redis adapter so rooms work across them.

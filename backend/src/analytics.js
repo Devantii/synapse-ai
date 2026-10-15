@@ -33,21 +33,23 @@ function shiftDay(day, n) {
   return isoDay(d);
 }
 
-function extractFeatures(userId, today) {
+async function extractFeatures(userId, today) {
   const start7 = shiftDay(today, -6);
   const start14 = shiftDay(today, -13);
 
   // Flatten de-duplicated daily totals (see usage.js) into day/category rows.
-  const usage = dedupe(db.prepare(
-    `SELECT day, app, category, minutes, source FROM app_usage WHERE user_id = ? AND day BETWEEN ? AND ?`
-  ).all(userId, start14, today)).flatMap((d) => Object.entries(d.byCategory).map(([category, m]) => ({ day: d.day, category, m })));
-  const sessions = db.prepare(
-    `SELECT kind, actual_min, completed, day, started_at FROM focus_sessions
-      WHERE user_id = ? AND day BETWEEN ? AND ?`
-  ).all(userId, start7, today);
-  const moods = db.prepare(
-    `SELECT energy, stress, sleep_h FROM mood_checkins WHERE user_id = ? AND day BETWEEN ? AND ?`
-  ).all(userId, start7, today);
+  const usage = dedupe(await db.all(
+    'SELECT day, app, category, minutes, source FROM app_usage WHERE user_id = ? AND day BETWEEN ? AND ?',
+    [userId, start14, today]
+  )).flatMap((d) => Object.entries(d.byCategory).map(([category, m]) => ({ day: d.day, category, m })));
+  const sessions = await db.all(
+    'SELECT kind, actual_min, completed, day, started_at FROM focus_sessions WHERE user_id = ? AND day BETWEEN ? AND ?',
+    [userId, start7, today]
+  );
+  const moods = await db.all(
+    'SELECT energy, stress, sleep_h FROM mood_checkins WHERE user_id = ? AND day BETWEEN ? AND ?',
+    [userId, start7, today]
+  );
 
   const thisWeek = usage.filter((u) => u.day >= start7);
   const lastWeek = usage.filter((u) => u.day < start7);
@@ -286,8 +288,8 @@ function recommend(raw, ml, fuzzy) {
   return recs.sort((a, b) => b.priority - a.priority).slice(0, 4);
 }
 
-function analyze(userId, today = isoDay(new Date())) {
-  const { raw, daysWithData, counts } = extractFeatures(userId, today);
+async function analyze(userId, today = isoDay(new Date())) {
+  const { raw, daysWithData, counts } = await extractFeatures(userId, today);
   const ml = mlPredict(raw);
   const fuzzy = fuzzyInfer(raw);
   const combined = 0.5 * ml.risk * 100 + 0.5 * fuzzy.load;
