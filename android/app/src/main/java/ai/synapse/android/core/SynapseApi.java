@@ -67,6 +67,44 @@ public final class SynapseApi {
         return m.find() ? Integer.parseInt(m.group(1)) : 0;
     }
 
+    // ---- phone features -------------------------------------------------------------
+
+    /** Daily limits set on the Synapse website. */
+    public java.util.List<PhoneLogic.Limit> limits() throws ApiException {
+        java.util.List<PhoneLogic.Limit> out = new java.util.ArrayList<>();
+        for (Object o : MiniJson.arr(MiniJson.obj(parse(request("GET", "/api/device/limits", null))).get("limits"))) {
+            java.util.Map<String, Object> m = MiniJson.obj(o);
+            String app = MiniJson.str(m, "app");
+            int minutes = (int) MiniJson.num(m, "minutes", 0);
+            if (app != null && minutes > 0) out.add(new PhoneLogic.Limit(app, minutes));
+        }
+        return out;
+    }
+
+    /** Points, level, streak, trees, and whether a focus block is running on any device. */
+    public java.util.Map<String, Object> summary() throws ApiException {
+        return MiniJson.obj(parse(request("GET", "/api/device/summary", null)));
+    }
+
+    /** Tell Synapse a block started (mode "focus"/"break", ends at endsAt) or stopped (mode null). */
+    public void setFocus(String mode, long endsAt) throws ApiException {
+        String body = mode == null ? "{\"mode\":null}" : "{\"mode\":" + Payload.quote(mode) + ",\"endsAt\":" + endsAt + "}";
+        request("PUT", "/api/device/focus", body);
+    }
+
+    /** Save a session (JSON from {@link PhoneLogic.Timer#sessionJson}); returns the server's reply (earned, tree, rewards...). */
+    public java.util.Map<String, Object> recordSession(String json) throws ApiException {
+        return MiniJson.obj(parse(request("POST", "/api/device/sessions", json)));
+    }
+
+    private static Object parse(String body) throws ApiException {
+        try {
+            return MiniJson.parse(body);
+        } catch (IllegalArgumentException e) {
+            throw new ApiException("The server sent an unexpected reply.", 0);
+        }
+    }
+
     private String request(String method, String path, String json) throws ApiException {
         if (server.isEmpty()) throw new ApiException("Add your Synapse server address first.", 0);
         if (!key.startsWith("syn_")) throw new ApiException("Paste the device key from Synapse > Privacy (it starts with syn_).", 0);

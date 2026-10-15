@@ -3,8 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Keeps the 30-minute background sync scheduled after a restart. -->
+    <!-- Keeps the 15-minute background sync scheduled after a restart. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Limit alerts, focus timer and bedtime nudge (asked at first launch on Android 13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lets the focus timer end exactly on time. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Granted by the user in Settings > Usage access; lets the app read how long apps are open. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -29,17 +33,40 @@
         android:icon="@mipmap/ic_launcher"
         android:label="Synapse"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.DarkActionBar"
+        android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- QR code on the Synapse website: synapse://connect?server=...&key=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="synapse" android:host="connect" />
+            </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".FocusAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".SynapseWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/synapse_widget_info" />
+        </receiver>
 
         <service
             android:name=".SyncJobService"

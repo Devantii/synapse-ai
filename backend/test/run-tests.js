@@ -293,6 +293,31 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     await api('DELETE', '/api/devices/' + k.data.id, null, A);
     await api('DELETE', '/api/usage/' + insta.find((e) => e.source === 'phone').id, null, A);
   });
+  await test('phone focus timer: focus state, sessions with rewards, summary', async () => {
+    const k = (await api('POST', '/api/devices', { kind: 'phone', name: 'Focus phone' }, A)).data;
+    const endsAt = Date.now() + 25 * 60000;
+    assert((await api('PUT', '/api/device/focus', { mode: 'focus', endsAt }, k.token)).status === 200);
+    const f = await api('GET', '/api/device/focus', null, devToken); // the browser extension sees the phone's block
+    assert(f.data.focusing === true && f.data.endsAt === endsAt, JSON.stringify(f.data));
+    assert((await api('PUT', '/api/device/focus', { mode: null }, k.token)).status === 200);
+    const before = (await api('GET', '/api/device/summary', null, k.token)).data;
+    const r = await api('POST', '/api/device/sessions', { kind: 'focus', plannedMin: 25, actualMin: 25, completed: true, tag: 'Phone block',
+      day: today, startedAt: ts(today, '14:00'), endedAt: ts(today, '14:25') }, k.token);
+    assert(r.status === 201 && r.data.earned === 35 && r.data.tree, JSON.stringify(r.data));
+    assert(r.data.rewards.points === before.points + 35, 'points added');
+    const bad = await api('POST', '/api/device/sessions', { kind: 'focus', plannedMin: 50, actualMin: 3, completed: true, day: today, startedAt: ts(today, '15:00'), endedAt: ts(today, '15:03') }, k.token);
+    assert(bad.status === 400 && /planned length/.test(bad.data.error), 'validation shared with website');
+    // only phone keys may do this
+    assert((await api('PUT', '/api/device/focus', { mode: null }, devToken)).status === 403);
+    assert((await api('POST', '/api/device/sessions', {}, devToken)).status === 403);
+    assert((await api('GET', '/api/device/summary', null, devToken)).status === 403);
+    // consent still applies
+    const kb = (await api('POST', '/api/devices', { kind: 'phone' }, B)).data;
+    const nb = await api('POST', '/api/device/sessions', { kind: 'break', plannedMin: 5, actualMin: 5, completed: true, day: today, startedAt: ts(today, '10:00'), endedAt: ts(today, '10:05') }, kb.token);
+    assert(nb.status === 403 && nb.data.consentRequired === 'activity_tracking');
+    await api('DELETE', '/api/devices/' + k.id, null, A);
+    await api('DELETE', '/api/devices/' + kb.id, null, B);
+  });
   await test('voice endpoint falls back to mesh without LiveKit', async () => {
     const r = await api('GET', '/api/rooms/deep-work/voice', null, A);
     assert(r.data.mode === 'mesh');
@@ -303,12 +328,13 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     const r = await api('GET', '/api/stats?days=30&today=' + today, null, A);
     assert(r.status === 200, JSON.stringify(r.data));
     const d = r.data;
-    assert(d.totals.sessions === 1 && d.totals.focusMinutes === 25 && d.totals.breaks === 1, JSON.stringify(d.totals));
-    assert(Math.abs(d.totals.completionRate - 0.5) < 1e-9, 'one finished, one abandoned');
-    assert(d.daily[today] === 25 && d.hours[9].minutes === 25 && d.hours[23].minutes === 0, 'hour of day uses local start time');
-    assert(d.weeks.length === 8 && d.weeks[7].focus === 25 && d.weeks[7].screen > 0, JSON.stringify(d.weeks[7]));
-    assert(d.lengths.find((l) => l.planned === 25).completed === 1 && d.lengths.find((l) => l.planned === 50).completed === 0);
-    assert(d.tags[0].tag === 'Thesis' && d.tags[0].minutes === 25);
+    // includes the 25-min block saved by the phone test above
+    assert(d.totals.sessions === 2 && d.totals.focusMinutes === 50 && d.totals.breaks === 1, JSON.stringify(d.totals));
+    assert(Math.abs(d.totals.completionRate - 2 / 3) < 1e-9, 'two finished, one abandoned');
+    assert(d.daily[today] === 50 && d.hours[9].minutes === 25 && d.hours[14].minutes === 25 && d.hours[23].minutes === 0, 'hour of day uses local start time');
+    assert(d.weeks.length === 8 && d.weeks[7].focus === 50 && d.weeks[7].screen > 0, JSON.stringify(d.weeks[7]));
+    assert(d.lengths.find((l) => l.planned === 25).completed === 2 && d.lengths.find((l) => l.planned === 50).completed === 0);
+    assert(d.tags.length === 2 && d.tags.every((t) => t.minutes === 25) && d.tags.some((t) => t.tag === 'Thesis'));
     const other = await api('GET', '/api/stats', null, B);
     assert(other.data.totals.sessions === 0, 'stats are private');
   });
@@ -336,7 +362,7 @@ const ts = (day, hh) => `${day}T${hh}:00`;
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);
-    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 3 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 3 && r.data.dailyLimits.length === 1);
+    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 4 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 4 && r.data.dailyLimits.length === 1);
     const rb = await api('GET', '/api/export', null, B);
     assert(rb.data.focusSessions.length === 0 && rb.data.communityPosts.length === 0);
   });
@@ -345,7 +371,7 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     const r = await api('GET', '/api/usage', null, A);
     assert(r.data.entries.length === 0);
     const s = await api('GET', '/api/sessions', null, A);
-    assert(s.data.length === 3, 'sessions should remain');
+    assert(s.data.length === 4, 'sessions should remain');
   });
   await test('delete account requires password and cascades', async () => {
     assert((await api('DELETE', '/api/account', { password: 'wrong' }, A)).status === 401);

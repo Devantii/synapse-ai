@@ -57,3 +57,12 @@ cd android
 | `MainActivity.java` | The single screen. |
 
 The app has no third-party libraries. JUnit is used only for tests.
+
+## What the app does (v2)
+
+- **Today**: phone time vs your 7-day average, pickups, first pickup, focus streak, your daily limits as meters, top apps by category.
+- **Week**: 7-day chart; tap a day to see its hour-by-hour chart, busiest hour and app list.
+- **Focus**: 15/25/50-minute focus blocks and 5/10/15-minute breaks. The countdown keeps running in a notification when you leave the app; when a block starts, your connected browser extension pauses distracting sites. Finished blocks earn points and a garden tree, as on the website. "Start break" right from the done notification.
+- **Settings**: connect by scanning the QR code on Synapse > Privacy > Connect Android phone (or type the address and key); limit alerts at 80%/100%; bedtime nudge; usage access.
+- **Home-screen widget**: today's time, pickups and top app.
+- Syncs about every 15 minutes in the background.

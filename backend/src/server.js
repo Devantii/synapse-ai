@@ -54,6 +54,7 @@ app.get('/api/rtc-config', requireAuth, (req, res) => {
 // Device-key API for the browser extension and desktop tracker (separate auth, CORS-enabled).
 app.use('/api/device', devices.router);
 app.use('/api/device', (err, req, res, next) => {
+  if (err.expose && err.status) return res.status(err.status).json({ error: err.message });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON.' });
   console.error(err);
   res.status(500).json({ error: 'Something went wrong.' });
@@ -63,6 +64,9 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 // LiveKit browser SDK, served from node_modules so it stays same-origin and pinned to package-lock.
 app.get('/vendor/livekit-client.umd.js', (req, res) =>
   res.sendFile(path.join(path.dirname(require.resolve('livekit-client')), 'livekit-client.umd.js'), { maxAge: '7d' }));
+// QR code generator for "scan to connect" on the phone (MIT, served from node_modules).
+app.get('/vendor/qrcode.js', (req, res) =>
+  res.sendFile(path.join(path.dirname(require.resolve('qrcode-generator')), 'qrcode.js'), { maxAge: '7d' }));
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 

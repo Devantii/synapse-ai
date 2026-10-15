@@ -1291,6 +1291,11 @@ VIEWS.privacy = async (main) => {
     </div>
     <dialog id="key-dialog" class="sheet"><form method="dialog"><h2>Your device key</h2>
       <p>Copy this key now. For your security it won't be shown again.</p>
+      <div class="qr-connect" id="qr-connect" hidden>
+        <div class="qr" id="qr"></div>
+        <div><b>Scan with your phone's camera</b><p class="muted">With the Synapse app installed, this connects it in one tap. No typing.</p>
+          <a class="btn" id="qr-link" href="#">Already on your phone? Tap to connect</a></div>
+      </div>
       <div class="keybox"><code id="key-value"></code><button type="button" class="btn" id="copy-key">Copy</button></div>
       <p style="margin-top:16px">Server address: <code id="key-server"></code></p>
       <p class="muted" id="key-help" style="font-size:var(--step--1)"></p>
@@ -1328,6 +1333,21 @@ VIEWS.privacy = async (main) => {
           desktop: 'Run the tracker once with "python3 synapse_tracker.py setup" (Windows or Mac) and paste the server address and key when asked.',
           phone: 'Open the Synapse app on your phone and paste the server address and key. Tip: use Copy, then send it to yourself.',
         }[kind];
+        const qrBox = $('#qr-connect');
+        qrBox.hidden = kind !== 'phone';
+        if (kind === 'phone') {
+          const link = `synapse://connect?server=${encodeURIComponent(location.origin)}&key=${encodeURIComponent(r.token)}`;
+          $('#qr-link').href = link;
+          try {
+            await loadScript('/vendor/qrcode.js');
+            const qr = window.qrcode(0, 'M');
+            qr.addData(link);
+            qr.make();
+            $('#qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+            $('#qr svg').setAttribute('role', 'img');
+            $('#qr svg').setAttribute('aria-label', 'QR code that connects the Synapse Android app');
+          } catch { $('#qr').textContent = 'QR code unavailable. Use the key below.'; }
+        }
         $('#key-dialog').showModal();
         paintDevices(await api('GET', '/devices'));
       }

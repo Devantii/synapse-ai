@@ -47,6 +47,11 @@ final class UsageReader {
 
     /** Foreground time per app for today and the previous (days - 1) days: day -> package -> ms. */
     static Map<String, Map<String, Long>> read(Context c, int days) {
+        return analyze(c, days).apps;
+    }
+
+    /** Per-app time plus hourly usage, pickups and first pickup for each day. */
+    static UsageAggregator.Result analyze(Context c, int days) {
         UsageStatsManager usm = (UsageStatsManager) c.getSystemService(Context.USAGE_STATS_SERVICE);
         ZoneId zone = ZoneId.systemDefault();
         long start = LocalDate.now(zone).minusDays(days - 1).atStartOfDay(zone).toInstant().toEpochMilli();
@@ -60,7 +65,7 @@ final class UsageReader {
                 list.add(new UsageAggregator.Event(e.getTimeStamp(), e.getPackageName(), e.getEventType()));
             }
         }
-        return new UsageAggregator(zone, ignored(c)).aggregate(list, end);
+        return new UsageAggregator(zone, ignored(c)).analyze(list, end);
     }
 
     /** Home screens, the system UI and this app itself aren't "using an app". */
