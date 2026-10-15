@@ -274,6 +274,22 @@ CREATE TABLE IF NOT EXISTS room_visits (
 );
 CREATE INDEX IF NOT EXISTS idx_room_visits_user ON room_visits(user_id, day);
 
+-- Planned rest days: they don't break your focus streak (max 2 a week).
+CREATE TABLE IF NOT EXISTS rest_days (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day        TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT ${T.NOW},
+  PRIMARY KEY (user_id, day)
+);
+
+-- Password reset links (one-time, 1 hour). Only a hash of the token is stored.
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at BIGINT NOT NULL,
+  used       INTEGER NOT NULL DEFAULT 0
+);
+
 -- Replies to community check-ins.
 CREATE TABLE IF NOT EXISTS post_replies (
   id         ${T.ID},

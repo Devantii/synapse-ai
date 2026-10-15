@@ -4,7 +4,7 @@ const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const { sign, requireAuth } = require('./auth');
 const game = require('./gamification');
-const { analyze } = require('./analytics');
+const { analyze, modelCard } = require('./analytics');
 const coach = require('./coach');
 const devices = require('./devices');
 const voice = require('./voice');
@@ -154,6 +154,39 @@ post('/auth/google', authLimiter, async (req, res) => {
   await consents(id);
   user = await db.get('SELECT * FROM users WHERE id = ?', [id]);
   res.status(201).json({ ...authReply(user), created: true });
+});
+
+// ---------- forgot password (public; needs email set up and a confirmed address) ----------
+const resetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false });
+const sha = (x) => crypto.createHash('sha256').update(String(x)).digest('hex');
+router.get('/auth/reset-available', (req, res) => res.json({ available: mailer.enabled }));
+post('/auth/forgot', resetLimiter, async (req, res) => {
+  if (!mailer.enabled) throw new HttpError(503, 'Password reset by email is not set up on this server. Ask the admin.');
+  const who = String(req.body.username || '').trim().toLowerCase();
+  // Same reply whether or not the account exists, so this can't be used to discover usernames or emails.
+  const reply = { ok: true, message: 'If that account has a confirmed email, a reset link is on its way. Check your inbox (and spam).' };
+  if (!who) return res.json(reply);
+  const u = await db.get('SELECT id, display_name, email FROM users WHERE (username = ? OR lower(email) = ?) AND email_verified = 1 AND email IS NOT NULL', [who, who]);
+  if (!u) return res.json(reply);
+  const token = crypto.randomBytes(32).toString('base64url');
+  await db.run('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)', [sha(token), u.id, Date.now() + 3600 * 1000]);
+  const link = `${weekly.baseUrl()}/?reset=${token}`;
+  await mailer.send({ to: u.email, subject: 'Reset your Synapse password',
+    text: `Hi ${u.display_name},\n\nReset your password here (valid for 1 hour, one use):\n${link}\n\nIf you didn't ask for this, ignore this email; your password stays the same.`,
+    html: `<p>Hi ${String(u.display_name).replace(/[<>&]/g, '')},</p><p><a href="${link}" style="display:inline-block;background:#1C2A33;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:700">Choose a new password</a></p><p style="color:#74838C;font-size:12px">Valid for 1 hour, one use. If you didn't ask for this, ignore this email.</p>` });
+  res.json(reply);
+});
+post('/auth/reset', resetLimiter, async (req, res) => {
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (password.length < 8 || password.length > 128) throw new HttpError(400, 'Password must be 8-128 characters.');
+  const row = await db.get('SELECT user_id, expires_at, used FROM password_resets WHERE token_hash = ?', [sha(req.body.token || '')]);
+  if (!row || row.used || Number(row.expires_at) < Date.now()) throw new HttpError(400, 'This reset link has expired or was already used. Ask for a new one.');
+  await db.tx(async (t) => {
+    await t.run('UPDATE password_resets SET used = 1 WHERE token_hash = ?', [sha(req.body.token)]);
+    await t.run('UPDATE users SET password_hash = ? WHERE id = ?', [await bcrypt.hash(password, 11), row.user_id]);
+  });
+  const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+  res.json(authReply(user));
 });
 
 // ---------- weekly email: public links ----------
@@ -367,6 +400,39 @@ get('/checkins', async (req, res) =>
 get('/insights', requireConsent('ai_insights', 'AI wellbeing insights'), async (req, res) => {
   const day = req.query.day ? validDay(req.query.day) : serverToday();
   res.json(await analyze(req.user.id, day));
+});
+
+// "How the AI works": model card with real evaluation numbers and your personal model's status.
+get('/model', requireConsent('ai_insights', 'AI wellbeing insights'), async (req, res) => {
+  const day = req.query.day ? validDay(req.query.day) : serverToday();
+  res.json(await modelCard(req.user.id, day));
+});
+
+// ---------- rest days ----------
+const weekOf = (day) => { const d = new Date(`${day}T12:00:00Z`); const mon = new Date(d); mon.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); const sun = new Date(mon); sun.setUTCDate(mon.getUTCDate() + 6); return [mon.toISOString().slice(0, 10), sun.toISOString().slice(0, 10)]; };
+get('/rest-days', async (req, res) => {
+  res.json((await db.all('SELECT day FROM rest_days WHERE user_id = ? ORDER BY day DESC LIMIT 60', [req.user.id])).map((r) => r.day));
+});
+const restDay = (v) => {
+  if (typeof v !== 'string' || !DAY_RE.test(v) || isNaN(Date.parse(v + 'T00:00:00Z'))) throw new HttpError(400, 'Invalid day (expected YYYY-MM-DD).');
+  return v;
+};
+post('/rest-days', async (req, res) => {
+  const day = restDay(req.body.day);
+  let today = req.body.today && DAY_RE.test(req.body.today) ? req.body.today : serverToday();
+  // The browser's "today" is trusted only within a day of the server's (time zones).
+  if (Math.abs(Date.parse(today) - Date.parse(serverToday())) > 2 * 86400000) today = serverToday();
+  const ahead = (Date.parse(day) - Date.parse(today)) / 86400000;
+  if (ahead < 0 || ahead > 14) throw new HttpError(400, 'Plan rest days from today up to two weeks ahead.');
+  const [mon, sun] = weekOf(day);
+  const n = await db.get('SELECT COUNT(*) AS n FROM rest_days WHERE user_id = ? AND day BETWEEN ? AND ? AND day <> ?', [req.user.id, mon, sun, day]);
+  if (Number(n.n) >= 2) throw new HttpError(400, 'Two rest days a week keep the streak meaningful. Pick another week.');
+  await db.run('INSERT INTO rest_days (user_id, day) VALUES (?, ?) ON CONFLICT DO NOTHING', [req.user.id, day]);
+  res.status(201).json({ ok: true, day });
+});
+del('/rest-days/:day', async (req, res) => {
+  await db.run('DELETE FROM rest_days WHERE user_id = ? AND day = ?', [req.user.id, restDay(req.params.day)]);
+  res.json({ ok: true });
 });
 
 const coachLimiter = rateLimit({ windowMs: 60 * 1000, limit: 12, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
@@ -640,7 +706,7 @@ get('/export', async (req, res) => {
 });
 
 const DELETE_SCOPES = {
-  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions', 'room_visits'],
+  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions', 'room_visits', 'rest_days'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
   community: ['posts', 'post_replies', 'reactions', 'room_messages', 'hidden_posts'],

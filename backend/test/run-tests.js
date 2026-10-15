@@ -747,6 +747,75 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     await api('PUT', '/api/consents', { community_profile: true }, B);
   });
 
+  console.log('Personal model, rest days, password reset');
+  await test('model card has held-out metrics; personal model trains on your days', async () => {
+    const reg = await api('POST', '/api/auth/register', { username: 'personal', password: 'personal-pass-1' });
+    const P = reg.data.token;
+    await api('PUT', '/api/consents', { activity_tracking: true, usage_tracking: true, ai_insights: true }, P);
+    const today = new Date().toISOString().slice(0, 10);
+    let card = await api('GET', `/api/model?day=${today}`, null, P);
+    assert(card.data.general.testAccuracy > 0.65 && card.data.general.auc > 0.75 && card.data.general.weights.length === 10, JSON.stringify(card.data.general).slice(0, 200));
+    assert(card.data.personal.active === false && card.data.personal.needed === 10 && card.data.limitations.length >= 3);
+    await api('POST', '/api/sample-data', { today }, P);
+    card = await api('GET', `/api/model?day=${today}`, null, P);
+    const pm = card.data.personal;
+    assert(pm.active && pm.days >= 10 && pm.accuracy >= 0 && pm.accuracy <= 1 && pm.shifts.length > 0, JSON.stringify(pm));
+    const ins = await api('GET', `/api/insights?day=${today}`, null, P);
+    assert(ins.data.personal.active && ins.data.personal.risk > 0 && ins.data.ml.generalRisk > 0, JSON.stringify(ins.data.personal));
+  });
+  await test('rest days keep the streak and are limited to 2 a week', async () => {
+    const reg = await api('POST', '/api/auth/register', { username: 'rester', password: 'rester-pass-1' });
+    const R = reg.data.token;
+    await api('PUT', '/api/consents', { activity_tracking: true }, R);
+    const base = new Date(new Date().toISOString().slice(0, 10) + 'T12:00:00Z');
+    const d = (n) => { const x = new Date(base); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+    const block = (day) => api('POST', '/api/sessions', { kind: 'focus', plannedMin: 25, actualMin: 25, completed: true, day, startedAt: `${day}T10:00`, endedAt: `${day}T10:25` }, R);
+    // A 4-day streak that ended 3 days ago, then two planned rest days, then focus today: the streak continues.
+    const rid = (await api('GET', '/api/me', null, R)).data.user.id;
+    await api('GET', '/api/rewards', null, R); // creates the rewards row
+    await db.run('UPDATE rewards SET current_streak = 4, best_streak = 4, last_focus_day = ? WHERE user_id = ?', [d(-3), rid]);
+    await db.run('INSERT INTO rest_days (user_id, day) VALUES (?, ?), (?, ?)', [rid, d(-2), rid, d(-1)]);
+    const s2 = await block(d(0));
+    assert(s2.status === 201 && s2.data.rewards.currentStreak === 5, 'rest days bridged the gap: ' + JSON.stringify(s2.data.rewards));
+    await db.run('UPDATE rewards SET current_streak = 4, last_focus_day = ? WHERE user_id = ?', [d(-3), rid]);
+    await db.run('DELETE FROM rest_days WHERE user_id = ? AND day = ?', [rid, d(-1)]);
+    await db.run("DELETE FROM focus_sessions WHERE user_id = ?", [rid]);
+    const s3 = await block(d(0));
+    assert(s3.data.rewards.currentStreak === 1, 'an unplanned gap resets the streak: ' + JSON.stringify(s3.data.rewards));
+    // Limits: up to 2 weeks ahead, 2 per Monday-Sunday week.
+    assert((await api('POST', '/api/rest-days', { day: d(30), today: d(0) }, R)).status === 400, 'max 2 weeks ahead');
+    const toMon = (8 - new Date(d(0) + 'T12:00:00Z').getUTCDay()) % 7 || 7; // next Monday
+    const m1 = await api('POST', '/api/rest-days', { day: d(toMon), today: d(0) }, R); assert(m1.status === 201, 'm1 ' + JSON.stringify(m1.data));
+    const m2 = await api('POST', '/api/rest-days', { day: d(toMon + 1), today: d(0) }, R); assert(m2.status === 201, 'm2 ' + JSON.stringify(m2.data));
+    assert((await api('POST', '/api/rest-days', { day: d(toMon + 2), today: d(0) }, R)).status === 400, 'max 2 a week');
+    const rw = await api('GET', '/api/rewards', null, R);
+    assert(rw.data.milestones.find((m) => m.code === 'rested').achievedAt, 'rested badge');
+    assert((await api('GET', '/api/rest-days', null, R)).data.length === 3);
+  });
+  await test('privacy policy and terms pages are public', async () => {
+    for (const page of ['privacy.html', 'terms.html']) {
+      const r = await fetch(`${base}/${page}`);
+      const html = await r.text();
+      assert(r.status === 200 && !html.includes('{{') && /Synapse/.test(html), page);
+    }
+  });
+  await test('forgot password: same reply for unknown users, one-time link works', async () => {
+    const mailer = require('../src/mailer');
+    const unknown = await api('POST', '/api/auth/forgot', { username: 'nobody-at-all' });
+    assert(unknown.status === 200 && /If that account/.test(unknown.data.message));
+    const n0 = mailer.outbox.length;
+    const known = await api('POST', '/api/auth/forgot', { username: 'MIRA@example.com' }); // the mailer test user's confirmed email
+    assert(known.status === 200 && known.data.message === unknown.data.message, 'no account enumeration');
+    const mail = mailer.outbox[n0];
+    assert(mail && mail.to === 'mira@example.com', 'reset email sent');
+    const token = mail.text.match(/reset=([A-Za-z0-9_-]+)/)[1];
+    assert((await api('POST', '/api/auth/reset', { token, password: 'short' })).status === 400);
+    const r = await api('POST', '/api/auth/reset', { token, password: 'brand-new-pass-9' });
+    assert(r.status === 200 && r.data.token, JSON.stringify(r.data));
+    assert((await api('POST', '/api/auth/reset', { token, password: 'another-pass-99' })).status === 400, 'one use only');
+    assert((await api('POST', '/api/auth/login', { username: 'mailer', password: 'brand-new-pass-9' })).status === 200);
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);

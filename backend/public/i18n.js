@@ -56,7 +56,8 @@ const HI = {
   'Save focus activity': 'फ़ोकस गतिविधि सेव करें', 'Save screen-time data': 'स्क्रीन-टाइम डेटा सेव करें', 'AI wellbeing insights': 'AI वेलबीइंग इनसाइट्स',
   'Show my name in the community': 'कम्युनिटी में मेरा नाम दिखाएँ', 'Done': 'हो गया', 'Close': 'बंद करें', 'Save': 'सेव करें', 'Change': 'बदलें', 'Copy': 'कॉपी करें',
   'Moderation': 'मॉडरेशन', 'Keep it': 'रहने दें', 'Remove and suspend author': 'हटाएँ और लेखक को निलंबित करें', 'Suspended accounts': 'निलंबित अकाउंट', 'Lift suspension': 'निलंबन हटाएँ',
-  'Language': 'भाषा', 'Garden and badges': 'बगीचा और बैज', 'Badges': 'बैज',
+  'Language': 'भाषा', 'How the AI works': 'AI कैसे काम करता है', 'Forgot password?': 'पासवर्ड भूल गए?', 'Privacy policy': 'प्राइवेसी पॉलिसी', 'Terms': 'शर्तें',
+  'Plan a rest day': 'आराम का दिन तय करें', 'Rest is part of the plan.': 'आराम भी योजना का हिस्सा है।', 'Limits, honestly': 'सीमाएँ, ईमानदारी से', 'Your data': 'आपका डेटा', 'Garden and badges': 'बगीचा और बैज', 'Badges': 'बैज',
   // common sentences
   'Work in blocks and take the break when the timer offers it.': 'टुकड़ों में काम करें और टाइमर कहे तो ब्रेक लें।',
   "It's late. A short wind-down session is better than a long push.": 'देर हो गई है। लंबी मेहनत से बेहतर है एक छोटा शांत सेशन।',

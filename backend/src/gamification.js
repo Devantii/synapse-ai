@@ -29,6 +29,7 @@ const MILESTONES = [
   { code: 'cheer_5', title: 'Cheerleader', desc: 'Send 5 cheers or nudges to buddies.' },
   { code: 'buddy', title: 'Accountable', desc: 'Pair up with an accountability buddy.' },
   { code: 'goal_met', title: 'Goal getter', desc: 'Reach your daily focus goal.' },
+  { code: 'rested', title: 'Rest is part of it', desc: 'Plan a rest day and keep your streak.' },
 ];
 
 // Level names (shown next to your name in the community).
@@ -49,6 +50,7 @@ async function checkBadges(userId) {
     ['first_reply', async () => (await one('SELECT COUNT(*) AS n FROM post_replies WHERE user_id = ?')) > 0],
     ['cheer_5', async () => (await one('SELECT COUNT(*) AS n FROM cheers WHERE from_id = ?')) >= 5],
     ['buddy', async () => (await one("SELECT COUNT(*) AS n FROM buddies WHERE (requester_id = ? OR addressee_id = ?) AND status = 'accepted'", [userId, userId])) > 0],
+    ['rested', async () => (await one('SELECT COUNT(*) AS n FROM rest_days WHERE user_id = ?')) > 0],
     ['goal_met', async () => {
       const goal = Number((await db.get('SELECT daily_goal_min FROM user_prefs WHERE user_id = ?', [userId]))?.daily_goal_min || 120);
       return !!(await db.get(`SELECT day FROM focus_sessions WHERE user_id = ? AND kind = 'focus' AND completed = 1 AND sample = 0
@@ -149,7 +151,13 @@ function recordSession(userId, session) {
     if (session.kind === 'focus' && session.completed) {
       if (last_focus_day !== day) {
         const gap = last_focus_day ? dayDiff(last_focus_day, day) : null;
-        current_streak = gap === 1 ? current_streak + 1 : gap !== null && gap <= 0 ? current_streak : 1;
+        // Planned rest days in between don't break the streak (rest is part of the plan).
+        let bridged = false;
+        if (gap > 1) {
+          const rest = await t.get('SELECT COUNT(*) AS n FROM rest_days WHERE user_id = ? AND day > ? AND day < ?', [userId, last_focus_day, day]);
+          bridged = Number(rest.n) === gap - 1;
+        }
+        current_streak = gap === 1 || bridged ? current_streak + 1 : gap !== null && gap <= 0 ? current_streak : 1;
         last_focus_day = gap !== null && gap < 0 ? last_focus_day : day;
       }
       best_streak = Math.max(best_streak, current_streak);

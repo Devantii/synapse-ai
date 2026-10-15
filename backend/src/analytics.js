@@ -166,10 +166,115 @@ function trainModel() {
     for (let j = 0; j < n; j++) z += w[j] * X[i][j];
     if ((z > 0 ? 1 : 0) === y[i]) correct++;
   }
-  return { w, b, trainAccuracy: correct / X.length, samples: X.length };
+  // Held-out check: 1000 fresh synthetic profiles the model never saw.
+  const rt = mulberry32(7), scores = [];
+  let testCorrect = 0;
+  for (let i = 0; i < 1000; i++) {
+    const f = {
+      screenHours: clamp(5 + 2.5 * gauss(rt), 0.5, 16), leisureShare: clamp(0.35 + 0.2 * gauss(rt), 0, 1), lateRatio: clamp(0.15 + 0.2 * gauss(rt), 0, 1),
+      breakRatio: clamp(0.7 + 0.4 * gauss(rt), 0, 2), focusHours: clamp(2 + 1.5 * gauss(rt), 0, 9), abandonRate: clamp(0.2 + 0.2 * gauss(rt), 0, 1),
+      screenTrend: clamp(0.3 * gauss(rt), -0.8, 1.5), stress: clamp(2.8 + gauss(rt), 1, 5), energy: clamp(3.2 + gauss(rt), 1, 5), sleepHours: clamp(7 + 1.2 * gauss(rt), 3, 11),
+    };
+    const label = rt() < 1 / (1 + Math.exp(-(priorRisk(f) + 0.6 * gauss(rt)))) ? 1 : 0;
+    const x = standardize(f);
+    let z = b;
+    for (let j = 0; j < n; j++) z += w[j] * x[j];
+    if ((z > 0 ? 1 : 0) === label) testCorrect++;
+    scores.push([z, label]);
+  }
+  return { w, b, trainAccuracy: correct / X.length, testAccuracy: testCorrect / 1000, auc: auc(scores), samples: X.length, testSamples: 1000 };
+}
+
+/** Area under the ROC curve: chance a random positive scores above a random negative. */
+function auc(pairs) {
+  const sorted = [...pairs].sort((a, b) => a[0] - b[0]);
+  let rankSum = 0, pos = 0;
+  sorted.forEach(([, y], i) => { if (y) { rankSum += i + 1; pos++; } });
+  const neg = sorted.length - pos;
+  return pos && neg ? (rankSum - (pos * (pos + 1)) / 2) / (pos * neg) : null;
 }
 
 const MODEL = trainModel();
+
+// ---------------------------------------------------------------------------
+// 2b. Personal model: learns how YOUR habits relate to YOUR stressful days.
+// Label = a check-in with stress >= 4 or energy <= 2. Only behaviour features are used (not stress/energy
+// themselves, which would leak the label). Weights are pulled towards the general model (a prior), so a few
+// days of data can't produce wild results, and accuracy is measured honestly with leave-one-out.
+// ---------------------------------------------------------------------------
+const BEHAVIOUR = ['screenHours', 'leisureShare', 'lateRatio', 'breakRatio', 'focusHours', 'abandonRate', 'screenTrend', 'sleepHours'];
+const BIDX = BEHAVIOUR.map((k) => FEATURES.findIndex((d) => d.key === k));
+const MIN_PERSONAL_DAYS = 10;
+
+function fitPersonal(rows, prior, b0, iters = 300) {
+  const w = [...prior];
+  let b = b0;
+  const lr = 0.15, lambda = 0.08;
+  for (let it = 0; it < iters; it++) {
+    const gw = new Array(w.length).fill(0);
+    let gb = 0;
+    for (const r of rows) {
+      let z = b;
+      for (let j = 0; j < w.length; j++) z += w[j] * r.x[j];
+      const err = 1 / (1 + Math.exp(-z)) - r.y;
+      for (let j = 0; j < w.length; j++) gw[j] += err * r.x[j];
+      gb += err;
+    }
+    for (let j = 0; j < w.length; j++) w[j] -= lr * (gw[j] / rows.length + lambda * (w[j] - prior[j]));
+    b -= lr * (gb / rows.length);
+  }
+  return { w, b };
+}
+const zOf = (m, x) => x.reduce((z, v, j) => z + m.w[j] * v, m.b);
+
+const personalCache = new Map(); // userId -> { key, value }
+async function personalModel(userId, today) {
+  const checks = await db.all('SELECT day, energy, stress FROM mood_checkins WHERE user_id = ? AND day BETWEEN ? AND ? ORDER BY day',
+    [userId, shiftDay(today, -59), today]);
+  const key = `${today}|${checks.length}|${checks.map((c) => c.stress * 10 + c.energy).join('')}`;
+  const hit = personalCache.get(userId);
+  if (hit && hit.key === key) return hit.value;
+
+  const rows = [];
+  for (const c of checks) {
+    const { raw, daysWithData } = await extractFeatures(userId, c.day);
+    if (daysWithData < 2) continue;
+    const xs = standardize(raw);
+    rows.push({ day: c.day, x: BIDX.map((j) => (raw[FEATURES[j].key] == null ? 0 : xs[j])), y: c.stress >= 4 || c.energy <= 2 ? 1 : 0 });
+  }
+  const pos = rows.filter((r) => r.y).length, neg = rows.length - pos;
+  let value;
+  if (rows.length < MIN_PERSONAL_DAYS || pos < 3 || neg < 3) {
+    value = { active: false, days: rows.length, needed: MIN_PERSONAL_DAYS, stressfulDays: pos, calmDays: neg };
+  } else {
+    const prior = BIDX.map((j) => MODEL.w[j]);
+    const general = { w: prior, b: MODEL.b };
+    // Leave-one-out: train on every other day, predict the held-out one.
+    let hits = 0, generalHits = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const m = fitPersonal(rows.filter((_, k) => k !== i), prior, MODEL.b, 150);
+      if ((zOf(m, rows[i].x) > 0 ? 1 : 0) === rows[i].y) hits++;
+      if ((zOf(general, rows[i].x) > 0 ? 1 : 0) === rows[i].y) generalHits++;
+    }
+    const m = fitPersonal(rows, prior, MODEL.b);
+    const shifts = BEHAVIOUR.map((k, j) => ({ key: k, label: FEATURES[BIDX[j]].label, general: prior[j], personal: m.w[j], change: m.w[j] - prior[j] }))
+      .sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+    value = {
+      active: true, days: rows.length, stressfulDays: pos, calmDays: neg, model: m,
+      accuracy: hits / rows.length, generalAccuracy: generalHits / rows.length, baseline: Math.max(pos, neg) / rows.length,
+      weight: Math.min(0.6, 0.2 + (rows.length - MIN_PERSONAL_DAYS) / 50),
+      shifts: shifts.slice(0, 4).map(({ model: _m, ...s }) => s),
+    };
+  }
+  personalCache.set(userId, { key, value });
+  return value;
+}
+
+function personalPredict(pm, raw) {
+  const xs = standardize(raw);
+  const x = BIDX.map((j) => (raw[FEATURES[j].key] == null ? 0 : xs[j]));
+  return 1 / (1 + Math.exp(-zOf(pm.model, x)));
+}
 
 function mlPredict(raw) {
   const x = standardize(raw);
@@ -292,7 +397,11 @@ async function analyze(userId, today = isoDay(new Date())) {
   const { raw, daysWithData, counts } = await extractFeatures(userId, today);
   const ml = mlPredict(raw);
   const fuzzy = fuzzyInfer(raw);
-  const combined = 0.5 * ml.risk * 100 + 0.5 * fuzzy.load;
+  const pm = await personalModel(userId, today).catch(() => ({ active: false, days: 0, needed: MIN_PERSONAL_DAYS }));
+  // Once the personal model has enough of your days, it gets a say in proportion to how much data it has.
+  const personalRisk = pm.active ? personalPredict(pm, raw) : null;
+  const mlRisk = pm.active ? (1 - pm.weight) * ml.risk + pm.weight * personalRisk : ml.risk;
+  const combined = 0.5 * mlRisk * 100 + 0.5 * fuzzy.load;
   const confidence = daysWithData >= 5 ? 'good' : daysWithData >= 2 ? 'limited' : 'very low';
   const D = Object.fromEntries(FEATURES.map((d) => [d.key, d]));
 
@@ -313,7 +422,10 @@ async function analyze(userId, today = isoDay(new Date())) {
     confidence,
     daysWithData,
     counts,
-    ml: { risk: ml.risk, factors, model: { type: 'logistic regression', trainedOn: `${MODEL.samples} synthetic weak-labelled profiles`, trainAccuracy: MODEL.trainAccuracy } },
+    ml: { risk: mlRisk, generalRisk: ml.risk, factors, model: { type: 'logistic regression', trainedOn: `${MODEL.samples} synthetic weak-labelled profiles`, trainAccuracy: MODEL.trainAccuracy, testAccuracy: MODEL.testAccuracy, auc: MODEL.auc } },
+    personal: pm.active
+      ? { active: true, days: pm.days, stressfulDays: pm.stressfulDays, accuracy: pm.accuracy, generalAccuracy: pm.generalAccuracy, baseline: pm.baseline, weight: pm.weight, risk: personalRisk, shifts: pm.shifts }
+      : { active: false, days: pm.days, needed: pm.needed, stressfulDays: pm.stressfulDays || 0, calmDays: pm.calmDays || 0 },
     fuzzy: { load: fuzzy.load, state: fuzzy.state, inputs: fuzzy.inputs, firedRules: fuzzy.firedRules },
     features: FEATURES.map((d) => ({ key: d.key, label: d.label, value: raw[d.key], display: fmt(d, raw[d.key]) })),
     recommendations: recommend(raw, ml, fuzzy),
@@ -321,4 +433,31 @@ async function analyze(userId, today = isoDay(new Date())) {
   };
 }
 
-module.exports = { analyze, extractFeatures, fuzzyInfer, mlPredict, MODEL, FEATURES };
+/** Everything the "How the AI works" page shows. */
+async function modelCard(userId, today) {
+  const pm = await personalModel(userId, today);
+  return {
+    general: {
+      type: 'Logistic regression (10 features, L2-regularised, batch gradient descent)',
+      samples: MODEL.samples, testSamples: MODEL.testSamples, trainAccuracy: MODEL.trainAccuracy, testAccuracy: MODEL.testAccuracy, auc: MODEL.auc,
+      data: 'Synthetic profiles drawn around typical values, labelled by an expert scoring rule inspired by burnout research (weak supervision), with noise added so the model must generalise.',
+      weights: FEATURES.map((d, j) => ({ key: d.key, label: d.label, weight: MODEL.w[j] })).sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight)),
+    },
+    personal: pm.active
+      ? { active: true, days: pm.days, stressfulDays: pm.stressfulDays, calmDays: pm.calmDays, accuracy: pm.accuracy, generalAccuracy: pm.generalAccuracy, baseline: pm.baseline, weight: pm.weight, shifts: pm.shifts }
+      : { active: false, days: pm.days, needed: pm.needed, stressfulDays: pm.stressfulDays, calmDays: pm.calmDays },
+    fuzzy: {
+      inputs: ['Screen load (screen time, social/video share, trend)', 'Recovery (breaks per block, sleep)', 'Strain (stress, late-night and abandoned sessions)'],
+      method: 'Mamdani inference: triangular/shoulder membership functions rate each input low/medium/high, IF-THEN rules combine them, centroid defuzzification gives a 0-100 load.',
+    },
+    combination: 'Final score = average of the ML risk (general model, blended with your personal model once it has enough days) and the fuzzy load.',
+    limitations: [
+      'Not a medical or clinical tool; it cannot diagnose burnout, depression or anything else.',
+      'The general model learned from synthetic data, so its accuracy figures describe how well it learned the expert rule, not real-world burnout.',
+      'The personal model only knows the days you checked in, and "stressful day" is your own rating (stress 4+ or energy 2 or less).',
+      'Patterns are correlations in your data, not proof of cause.',
+    ],
+  };
+}
+
+module.exports = { analyze, extractFeatures, fuzzyInfer, mlPredict, modelCard, personalModel, MODEL, FEATURES };

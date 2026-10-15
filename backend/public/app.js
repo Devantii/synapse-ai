@@ -103,6 +103,7 @@ function setupAuth() {
     } finally { btn.disabled = false; }
   });
   setupGoogle();
+  setupReset();
 }
 
 // "Continue with Google" (Google Identity Services). Shown only when the server has GOOGLE_CLIENT_ID.
@@ -130,6 +131,30 @@ const gsi = {
     return true;
   },
 };
+
+// Forgot password (email) and the reset link (?reset=token).
+async function setupReset() {
+  let available = false;
+  try { available = (await api('GET', '/auth/reset-available')).available; } catch {}
+  const link = $('#forgot');
+  if (link) link.hidden = !available;
+  link?.addEventListener('click', async () => {
+    const who = prompt('Your username or confirmed email:');
+    if (!who) return;
+    try { toast((await api('POST', '/auth/forgot', { username: who })).message); } catch (e) { fail(e); }
+  });
+  const token = new URLSearchParams(location.search).get('reset');
+  if (!token) return;
+  history.replaceState(null, '', location.pathname + location.hash);
+  const pw = prompt('Choose a new password (at least 8 characters):');
+  if (!pw) return;
+  try {
+    const r = await api('POST', '/auth/reset', { token, password: pw });
+    state.token = r.token; store.set('synapse.token', r.token);
+    toast('Password changed. You are signed in.', 'win');
+    await enterApp(false);
+  } catch (e) { fail(e); }
+}
 
 async function setupGoogle() {
   const box = $('#google-auth');
@@ -683,7 +708,7 @@ VIEWS.today = async (main) => {
 async function renderTodaySide() {
   const side = $('#today-side');
   if (!side) return;
-  const [rewards, sessions, tasks] = await Promise.all([api('GET', '/rewards'), api('GET', '/sessions?days=2'), api('GET', `/tasks?day=${localDay()}`)]);
+  const [rewards, sessions, tasks, restDays] = await Promise.all([api('GET', '/rewards'), api('GET', '/sessions?days=2'), api('GET', `/tasks?day=${localDay()}`), api('GET', '/rest-days').catch(() => [])]);
   side.onclick = (e) => { if (e.target.closest('#notify-on')) enableNotifications(); taskClick(e); };
   side.onsubmit = taskSubmit;
   side.onchange = taskChange;
@@ -700,6 +725,7 @@ async function renderTodaySide() {
     ${warning ? `<a class="warn-banner ${warning.level}" href="#/insights"><b>Early warning.</b> ${esc(warning.text)} <span>See why →</span></a>` : ''}
     <h1>${greet}, ${esc(state.me.user.displayName)}.</h1>
     <p class="muted">${hour >= 22 ? "It's late. A short wind-down session is better than a long push." : 'Work in blocks and take the break when the timer offers it.'}</p>
+    ${restHtml(restDays)}
     ${goalHtml(focusMin)}
     <div class="statline">
       <div><b class="num">${fmtMin(focusMin)}</b><span>focused today</span></div>
@@ -812,6 +838,25 @@ function paintSideLevel() {
   const el = $('#who-level');
   if (el && r) el.innerHTML = `<a href="#/garden">Lv ${r.level} · ${esc(r.levelTitle || '')}</a>`;
 }
+
+// Planned rest days: up to 2 a week, they don't break the streak.
+function restHtml(days) {
+  const today = localDay(), upcoming = days.filter((d) => d >= today).sort();
+  return `<div class="rest ${upcoming[0] === today ? 'on' : ''}">${upcoming[0] === today
+    ? '<b>🌿 Today is a rest day.</b> Your streak is safe. Step away from screens if you can.'
+    : `<span>${upcoming.length ? `Next rest day: <b>${shortDate(upcoming[0])}</b>` : 'Rest is part of the plan.'}</span>`}
+    <label class="rest-pick">Plan a rest day <input type="date" id="rest-date" min="${today}" max="${shiftDay(today, 14)}" /></label>
+    ${upcoming.length ? `<button class="link" data-rest-del="${upcoming[0]}">Cancel ${upcoming[0] === today ? "today's" : 'next'}</button>` : ''}</div>`;
+}
+document.addEventListener('change', async (e) => {
+  if (e.target.id !== 'rest-date' || !e.target.value) return;
+  try { await api('POST', '/rest-days', { day: e.target.value, today: localDay() }); toast('Rest day planned. Your streak will wait for you.', 'win'); renderTodaySide(); } catch (err) { fail(err); }
+});
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-rest-del]');
+  if (!b) return;
+  try { await api('DELETE', `/rest-days/${b.dataset.restDel}`); renderTodaySide(); } catch (err) { fail(err); }
+});
 
 // Daily focus goal.
 const GOALS = [30, 60, 90, 120, 180, 240, 300, 360];
@@ -1999,10 +2044,12 @@ document.addEventListener('click', (e) => {
 
 const insightsTabs = (cur) => `<div class="chips tabs-inline" role="tablist" style="margin:-6px 0 18px">
   <a class="chip" role="tab" href="#/insights" aria-pressed="${cur === 'overview'}">Overview</a>
-  <a class="chip" role="tab" href="#/insights/trends" aria-pressed="${cur === 'trends'}">Trends</a></div>`;
+  <a class="chip" role="tab" href="#/insights/trends" aria-pressed="${cur === 'trends'}">Trends</a>
+  <a class="chip" role="tab" href="#/insights/model" aria-pressed="${cur === 'model'}">How the AI works</a></div>`;
 
 VIEWS.insights = async (main, arg) => {
   if (arg === 'trends') return renderTrendsView(main);
+  if (arg === 'model') return renderModelView(main);
   if (!state.me.consents.ai_insights) {
     main.innerHTML = `<div class="page-head"><div><h1>Insights</h1><p>Machine learning and fuzzy logic that explain how balanced your week looks.</p></div></div>
       ${insightsTabs('overview')}
@@ -2039,6 +2086,7 @@ VIEWS.insights = async (main, arg) => {
             <p style="margin:0">Load score ${ins.score}/100, where lower is calmer. Confidence is <b>${ins.confidence}</b>: ${ins.daysWithData} ${ins.daysWithData === 1 ? 'day' : 'days'} with data, ${ins.counts.focusSessions} focus sessions, ${ins.counts.checkins} check-ins.</p>
             ${ins.confidence !== 'good' ? `<p class="muted" style="margin:8px 0 0;font-size:var(--step--1)">Log screen time and use the timer on a few more days for a steadier reading.</p>` : ''}</div>
         </section>
+        ${personalCard(ins.personal)}
         <section class="panel" id="trend-panel"><h2 style="font-size:var(--step-1)">Early warning</h2><p class="muted">Loading the last 14 days…</p></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Suggestions for this week</h2>
           <ul class="recs">${ins.recommendations.map((r) => `<li class="rec" data-p="${r.priority}"><h3>${esc(r.title)}</h3><p>${esc(r.action)}</p><div class="because">Because: ${esc(r.because)}.</div></li>`).join('')}</ul></section>
@@ -2110,6 +2158,63 @@ VIEWS.insights = async (main, arg) => {
     } catch (err) { fail(err); } finally { btn.disabled = false; }
   });
 };
+
+// ---------------------------------------------------------------- Personal model + model card
+const pctTxt = (x) => `${Math.round(x * 100)}%`;
+function personalCard(p) {
+  if (!p) return '';
+  if (!p.active) {
+    const have = p.days || 0;
+    return `<section class="panel personal"><h2 style="font-size:var(--step-1)">Your personal model <span class="pill">learning</span></h2>
+      <p>After ${10} days with a check-in, Synapse trains a model on <b>your</b> days to learn which of your habits come before your stressful days.</p>
+      <div class="level-bar"><i style="width:${Math.min(100, have * 10)}%"></i></div>
+      <small class="muted">${have} of 10 days so far${p.stressfulDays || p.calmDays ? ` (it also needs at least 3 stressful and 3 calm days; you have ${p.stressfulDays} and ${p.calmDays})` : ''}. Check in below each day.</small></section>`;
+  }
+  const better = p.accuracy - p.generalAccuracy;
+  return `<section class="panel personal"><h2 style="font-size:var(--step-1)">Your personal model <span class="pill good">active</span></h2>
+    <p>Trained on <b>${p.days} of your days</b> (${p.stressfulDays} felt stressful). Tested fairly, one day at a time on days it hadn't seen, it called <b>${pctTxt(p.accuracy)}</b> of them right,
+      vs ${pctTxt(p.generalAccuracy)} for the general model and ${pctTxt(p.baseline)} for always guessing your most common day.${p.days < 30 ? ` With only ${p.days} days this is a rough guide; it gets more reliable as you keep checking in.` : ''}</p>
+    ${better > 0.02 ? '<p class="muted" style="margin:0 0 8px">It knows you better than the general model, so it now counts for ' + pctTxt(p.weight) + ' of your score.</p>' : '<p class="muted" style="margin:0 0 8px">It isn\'t clearly better than the general model yet, so it has a small say (' + pctTxt(p.weight) + ').</p>'}
+    <h3 style="font-size:var(--step-0);margin:10px 0 4px">What it learned about you</h3>
+    <ul class="shifts">${p.shifts.map((x) => `<li>${esc(x.label)}: <b>${x.change > 0 ? 'matters more' : 'matters less'}</b> for you than for most people</li>`).join('')}</ul>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Today's personal estimate: ${pctTxt(p.risk)} chance of a stressful day. <a href="#/insights/model">How this works</a></p></section>`;
+}
+
+async function renderModelView(main) {
+  if (!state.me.consents.ai_insights) { location.hash = '#/insights'; return; }
+  const m = await api('GET', `/model?day=${localDay()}`);
+  const g = m.general, maxW = Math.max(...g.weights.map((w) => Math.abs(w.weight)));
+  main.innerHTML = `
+    <div class="page-head"><div><h1>Insights</h1><p>How Synapse's AI reaches your score, how well it works, and what it can't do.</p></div></div>
+    ${insightsTabs('model')}
+    <div class="split">
+      <div class="stack">
+        <section class="panel"><h2 style="font-size:var(--step-1)">1 · General model</h2>
+          <p>${esc(g.type)}. ${esc(g.data)}</p>
+          <div class="review-grid">
+            <div><b class="num">${g.samples.toLocaleString()}</b><span>training profiles</span></div>
+            <div><b class="num">${pctTxt(g.testAccuracy)}</b><span>accuracy on ${g.testSamples.toLocaleString()} unseen profiles</span></div>
+            <div><b class="num">${g.auc.toFixed(2)}</b><span>AUC (1.0 perfect, 0.5 random)</span></div>
+          </div>
+          <h3 style="font-size:var(--step-0);margin:16px 0 6px">What each pattern does to the risk</h3>
+          <div class="weights">${g.weights.map((w) => `<div><span>${esc(w.label)}</span><span class="wbar ${w.weight > 0 ? 'up' : 'down'}"><i style="width:${Math.round((Math.abs(w.weight) / maxW) * 100)}%"></i></span><b class="num">${w.weight > 0 ? '+' : ''}${w.weight.toFixed(2)}</b></div>`).join('')}</div>
+          <p class="muted" style="font-size:12px">Positive (red) raises the risk, negative (green) lowers it, per standard deviation from typical.</p></section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">2 · Your personal model</h2>
+          ${m.personal.active ? `<p>Trained on ${m.personal.days} of your days with check-ins (${m.personal.stressfulDays} stressful, ${m.personal.calmDays} calm), starting from the general model's weights so a few days can't produce wild results.</p>
+            <div class="review-grid"><div><b class="num">${pctTxt(m.personal.accuracy)}</b><span>leave-one-out accuracy on your days</span></div>
+              <div><b class="num">${pctTxt(m.personal.generalAccuracy)}</b><span>general model on the same days</span></div>
+              <div><b class="num">${pctTxt(m.personal.baseline)}</b><span>always guessing your usual day</span></div>
+              <div><b class="num">${pctTxt(m.personal.weight)}</b><span>its share of your score</span></div></div>`
+            : `<p>Not active yet: ${m.personal.days} of ${m.personal.needed} days with check-ins (needs at least 3 stressful and 3 calm). It uses only your habits (screen time, late nights, breaks, sleep…), not your stress rating itself, so it can't cheat.</p>`}</section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">3 · Fuzzy logic</h2><p>${esc(m.fuzzy.method)}</p>
+          <ul>${m.fuzzy.inputs.map((x) => `<li>${esc(x)}</li>`).join('')}</ul><p class="muted">${esc(m.combination)}</p></section>
+      </div>
+      <div class="stack">
+        <section class="panel"><h2 style="font-size:var(--step-1)">Limits, honestly</h2><ul class="limits">${m.limitations.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Your data</h2><p>The models run on this server. Only you see your score. Turning off "AI wellbeing insights" in Privacy stops all of it; deleting your data there removes everything they learned from.</p></section>
+      </div>
+    </div>`;
+}
 
 // ---------------------------------------------------------------- Insights > Trends
 function barsSvg(values, labels, { cls = 'focus', fmt = fmtMin, h = 140, tips } = {}) {
@@ -2336,7 +2441,7 @@ VIEWS.privacy = async (main) => {
   const [c, log] = await Promise.all([api('GET', '/consents'), api('GET', '/consents/log')]);
   const FIELD = Object.fromEntries(CONSENTS.map((x) => [x.key, x.title]));
   main.innerHTML = `
-    <div class="page-head"><div><h1>Privacy and data</h1><p>Your data is stored in this server's database and is only visible to your account, except community check-ins and room messages, which other members see.</p></div></div>
+    <div class="page-head"><div><h1>Privacy and data</h1><p>Your data is stored in this server's database and is only visible to your account, except community check-ins and room messages, which other members see. Read the <a href="/privacy.html" target="_blank" rel="noopener">privacy policy</a> and <a href="/terms.html" target="_blank" rel="noopener">terms</a>.</p></div></div>
     <div class="split">
       <div class="stack">
         <section class="panel"><h2 style="font-size:var(--step-1)">What Synapse may save</h2><form id="consent-form">${consentControls(c)}</form></section>

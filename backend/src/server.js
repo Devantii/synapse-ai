@@ -61,6 +61,18 @@ app.use('/api/device', (err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: 'Something went wrong.' });
 });
+// Privacy policy and terms, with the operator's details from OPERATOR_NAME / OPERATOR_EMAIL.
+const legal = (file) => (req, res) => {
+  const fill = (v, d) => String(v || d).replace(/[<>&"]/g, '');
+  const html = require('fs').readFileSync(path.join(__dirname, '..', 'legal', file), 'utf8')
+    .replaceAll('{{OPERATOR}}', fill(process.env.OPERATOR_NAME, 'the operator of this Synapse server'))
+    .replaceAll('{{CONTACT}}', process.env.OPERATOR_EMAIL ? `<a href="mailto:${fill(process.env.OPERATOR_EMAIL)}">${fill(process.env.OPERATOR_EMAIL)}</a>` : 'via the site admin')
+    .replaceAll('{{UPDATED}}', '15 October 2026');
+  res.type('html').send(html);
+};
+app.get('/privacy.html', legal('privacy.html'));
+app.get('/terms.html', legal('terms.html'));
+
 app.use('/api', routes);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 // LiveKit browser SDK, served from node_modules so it stays same-origin and pinned to package-lock.
