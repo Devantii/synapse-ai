@@ -1,14 +1,14 @@
-// Socket.IO: room presence, persisted room chat, focus status, and WebRTC signaling (small mesh audio).
+// Socket.IO: room presence, persisted room chat, focus status, and WebRTC signaling for the small peer-to-peer video/voice call.
 const db = require('./db');
 const { verify } = require('./auth');
 
-const MAX_AUDIO_PEERS = 6; // mesh audio stays usable up to ~6 people; beyond that use an SFU.
-const members = new Map(); // socketId -> { userId, name, roomId, focusing, focusEndsAt, audio, muted }
+const MAX_AUDIO_PEERS = 6; // a peer-to-peer call stays usable up to ~6 people; beyond that use LiveKit.
+const members = new Map(); // socketId -> { userId, name, roomId, focusing, focusEndsAt, audio, muted, video } (audio = on the call)
 
 function roomMembers(roomId) {
   return [...members.entries()]
     .filter(([, m]) => m.roomId === roomId)
-    .map(([socketId, m]) => ({ socketId, userId: m.userId, name: m.name, focusing: m.focusing, focusEndsAt: m.focusEndsAt, audio: m.audio, muted: m.muted }));
+    .map(([socketId, m]) => ({ socketId, userId: m.userId, name: m.name, focusing: m.focusing, focusEndsAt: m.focusEndsAt, audio: m.audio, muted: m.muted, video: !!m.video }));
 }
 
 function attach(io) {
@@ -45,12 +45,13 @@ function attach(io) {
     socket.leave(roomId);
     m.roomId = null;
     m.audio = false;
+    m.video = false;
     broadcastPresence(roomId);
     io.emit('rooms:counts');
   }
 
   io.on('connection', (socket) => {
-    members.set(socket.id, { userId: socket.user.id, name: socket.user.name, roomId: null, focusing: false, focusEndsAt: null, audio: false, muted: false });
+    members.set(socket.id, { userId: socket.user.id, name: socket.user.name, roomId: null, focusing: false, focusEndsAt: null, audio: false, muted: false, video: false });
 
     socket.on('room:join', async ({ roomId } = {}, ack) => {
       try {
@@ -102,13 +103,16 @@ function attach(io) {
     });
 
     // --- WebRTC audio (mesh). The newcomer receives the list of existing audio peers and sends offers to each.
-    socket.on('audio:join', (_, ack) => {
+    // { video, muted }: what the newcomer starts with (mic is off by default: quiet study rooms).
+    socket.on('audio:join', (opts, ack) => {
+      if (typeof opts === 'function') { ack = opts; opts = {}; }
       const m = members.get(socket.id);
       if (!m?.roomId) return ack?.({ error: 'Join a room first.' });
       const peers = roomMembers(m.roomId).filter((p) => p.audio && p.socketId !== socket.id);
       if (peers.length >= MAX_AUDIO_PEERS) return ack?.({ error: `Audio is limited to ${MAX_AUDIO_PEERS} people per room.` });
       m.audio = true;
-      m.muted = false;
+      m.muted = opts?.muted !== false;
+      m.video = !!opts?.video;
       broadcastPresence(m.roomId);
       ack?.({ ok: true, peers: peers.map((p) => ({ socketId: p.socketId, name: p.name })) });
     });
@@ -117,23 +121,27 @@ function attach(io) {
       const m = members.get(socket.id);
       if (!m?.roomId || !m.audio) return;
       m.audio = false;
+      m.video = false;
       socket.to(m.roomId).emit('audio:peer-left', { socketId: socket.id });
       broadcastPresence(m.roomId);
     });
 
     // LiveKit mode: media goes through the SFU, so the socket only carries who is on voice for presence.
-    socket.on('voice:status', ({ on, muted } = {}) => {
+    socket.on('voice:status', ({ on, muted, video } = {}) => {
       const m = members.get(socket.id);
       if (!m?.roomId) return;
       m.audio = !!on;
       m.muted = !!on && !!muted;
+      m.video = !!on && !!video;
       broadcastPresence(m.roomId);
     });
 
-    socket.on('audio:mute', ({ muted } = {}) => {
+    // Mic / camera on or off while on the call.
+    socket.on('audio:mute', ({ muted, video } = {}) => {
       const m = members.get(socket.id);
       if (!m?.audio) return;
-      m.muted = !!muted;
+      if (muted !== undefined) m.muted = !!muted;
+      if (video !== undefined) m.video = !!video;
       broadcastPresence(m.roomId);
     });
 
@@ -142,7 +150,7 @@ function attach(io) {
       const me = members.get(socket.id);
       const peer = members.get(to);
       if (!me?.audio || !peer?.audio || me.roomId !== peer.roomId) return;
-      if (!data || typeof data !== 'object' || JSON.stringify(data).length > 20000) return;
+      if (!data || typeof data !== 'object' || JSON.stringify(data).length > 60000) return;
       io.to(to).emit('rtc:signal', { from: socket.id, name: me.name, data });
     });
 

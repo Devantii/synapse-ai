@@ -1,4 +1,4 @@
-// Voice rooms. With LIVEKIT_* set, audio runs through a LiveKit media server (SFU), which scales to
+// Video/voice rooms. With LIVEKIT_* set, camera and mic run through a LiveKit media server (SFU), which scales to
 // large rooms and works on more networks. Without it, the dashboard falls back to peer-to-peer WebRTC
 // (realtime.js), which is fine for about 6 people.
 const { AccessToken, TrackSource } = require('livekit-server-sdk');
@@ -23,7 +23,7 @@ async function tokenFor(user, roomId) {
     canSubscribe: true,
     canPublish: true,
     canPublishData: false,
-    canPublishSources: [TrackSource.MICROPHONE], // voice only: no camera or screen share
+    canPublishSources: [TrackSource.MICROPHONE, TrackSource.CAMERA], // camera + mic, no screen share
   });
   return at.toJwt();
 }

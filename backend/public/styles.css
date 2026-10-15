@@ -439,3 +439,35 @@ dialog.sheet::backdrop { background: rgb(16 24 30 / .55); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---------- live room video call ---------- */
+.call { margin-bottom: 16px; padding: 14px; }
+.stage { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.stage:empty { display: none; }
+.stage[data-count="1"] { grid-template-columns: minmax(0, 560px); }
+.stage[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tile { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-md, 14px); overflow: hidden; background: #141D23; color: #fff; }
+.tile video { width: 100%; height: 100%; object-fit: cover; display: none; background: #000; }
+.tile.has-video video { display: block; }
+.tile.mine video { transform: scaleX(-1); }
+.tile-face { position: absolute; inset: 0; margin: auto; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--lichen) 70%, var(--ink)); color: #fff; font-weight: 700; font-size: 1.3rem; }
+.tile.has-video .tile-face { display: none; }
+.tile-name { position: absolute; left: 8px; bottom: 8px; right: 8px; display: flex; align-items: center; gap: 6px; font-size: .82rem; color: #fff; }
+.tile-name span { background: rgba(10, 16, 20, .62); padding: 3px 8px; border-radius: 99px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-name svg { width: 22px; height: 22px; padding: 4px; border-radius: 50%; background: rgba(10, 16, 20, .62); flex: none; }
+.tile-name svg.mic-off { color: #F2A3AE; }
+.tile-name em { font-style: normal; background: var(--lichen); padding: 3px 8px; border-radius: 99px; margin-left: auto; }
+.stage-empty { display: flex; gap: 14px; align-items: center; padding: 6px 4px 2px; color: var(--ink-2); }
+.stage-empty[hidden] { display: none; }
+.stage-empty svg { width: 40px; height: 40px; flex: none; color: var(--lichen); }
+.stage-empty p { margin: 0; }
+.call-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.call-bar .btn svg { width: 18px; height: 18px; }
+.call-bar .btn.off { color: var(--ink-3); }
+.call-bar small { flex-basis: 100%; }
+@media (max-width: 600px) {
+  .stage, .stage[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .stage[data-count="1"] { grid-template-columns: 1fr; }
+  .call-bar .btn { flex: 1 1 auto; }
+}

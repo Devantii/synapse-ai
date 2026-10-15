@@ -172,8 +172,8 @@ CREATE INDEX IF NOT EXISTS idx_room_msgs ON room_messages(room_id, id);
 `;
 
 const ROOMS = [
-  ['deep-work', 'Deep Work', 'Quiet co-working. Cameras off, heads down, 50/10 cycles.'],
-  ['study-hall', 'Study Hall', 'Students and learners keeping each other accountable.'],
+  ['deep-work', 'Deep Work', 'Quiet co-working on camera. Mics off, heads down, 50/10 cycles.'],
+  ['study-hall', 'Study Hall', 'Study on camera with students and learners keeping each other accountable.'],
   ['gentle-start', 'Gentle Start', 'Short 15-minute sessions for low-energy days.'],
   ['night-owls', 'Night Owls', 'Late focus sessions with a hard stop before bed.'],
 ];
@@ -295,7 +295,7 @@ function init() {
   readyPromise ??= (async () => {
     await driver.exec(SCHEMA);
     await migrate();
-    for (const r of ROOMS) await driver.run('INSERT INTO rooms (id, name, description) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING', r);
+    for (const r of ROOMS) await driver.run('INSERT INTO rooms (id, name, description) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, description = excluded.description', r);
   })();
   return readyPromise;
 }

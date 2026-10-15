@@ -33,9 +33,9 @@ app.use(
     },
   })
 );
-// Allow the mic only for this origin; no camera/geolocation needed.
+// Allow the mic and camera only for this origin (live rooms); no geolocation.
 app.use((req, res, next) => {
-  res.setHeader('Permissions-Policy', 'microphone=(self), camera=(), geolocation=()');
+  res.setHeader('Permissions-Policy', 'microphone=(self), camera=(self), geolocation=()');
   next();
 });
 app.use(express.json({ limit: '100kb' }));

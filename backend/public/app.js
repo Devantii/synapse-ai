@@ -511,7 +511,7 @@ VIEWS.rooms = async (main, roomId) => {
   if (rooms.current) { state.socket?.emit('room:leave'); rooms.current = null; rtc.leave(); }
   const list = await api('GET', '/rooms');
   main.innerHTML = `
-    <div class="page-head"><div><h1>Focus rooms</h1><p>Work alongside other people. Chat is text-first; voice is optional and only starts when you join it.</p></div></div>
+    <div class="page-head"><div><h1>Focus rooms</h1><p>Work alongside other people. Study on camera with others, chat, or just work quietly together. Camera and mic only start when you choose.</p></div></div>
     <div class="room-list">${list.map((r) => `
       <button class="room-tile" data-room="${esc(r.id)}">
         <h3>${esc(r.name)}</h3><p>${esc(r.description)}</p>
@@ -530,9 +530,14 @@ async function renderRoom(main, roomId) {
   if (!room) { main.innerHTML = `<p class="empty">That room doesn't exist. <a href="#/rooms">See all rooms</a></p>`; return; }
   main.innerHTML = `
     <div class="page-head"><div><a href="#/rooms" class="muted">All rooms</a><h1>${esc(room.name)}</h1><p>${esc(room.description)}</p></div></div>
+    <section class="panel call">
+      <div class="stage" id="stage" aria-label="People on camera"></div>
+      <div class="stage-empty" id="stage-empty"><svg aria-hidden="true"><use href="#i-cam"/></svg>
+        <p><b>Study together on camera.</b> Turn your camera on so others can see you working, or join without it. Mics start off: it's a quiet room.</p></div>
+      <div class="call-bar" id="call-bar"></div>
+    </section>
     <div class="room">
-      <aside class="panel"><h2 style="font-size:var(--step-1)">Here now</h2><ul class="people" id="people"></ul>
-        <div class="audio-bar" id="audio-bar"></div></aside>
+      <aside class="panel"><h2 style="font-size:var(--step-1)">Here now</h2><ul class="people" id="people"></ul></aside>
       <section class="panel chat">
         <div class="chat-log" id="chat-log" aria-live="polite"></div>
         <form class="chat-form" id="chat-form"><label class="sr" style="position:absolute;left:-999px" for="chat-input">Message</label>
@@ -554,8 +559,9 @@ async function renderRoom(main, roomId) {
     $('#people').innerHTML = members.map((m) => {
       const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
       return `<li><span class="face">${esc(initials(m.name))}</span><span><b>${esc(m.name)}${m.socketId === state.socket?.id ? ' (you)' : ''}</b><br>
-        <span class="status ${m.focusing ? 'focusing' : ''}">${m.focusing ? `Focusing${mins != null ? `, ${mins} min left` : ''}` : 'Here'}${m.audio ? (m.muted ? ' · voice muted' : ' · on voice') : ''}</span></span></li>`;
+        <span class="status ${m.focusing ? 'focusing' : ''}">${m.focusing ? `Focusing${mins != null ? `, ${mins} min left` : ''}` : 'Here'}${m.audio ? (m.video ? ' · on camera' : ' · in call') + (m.muted ? '' : ' · mic on') : ''}</span></span></li>`;
     }).join('');
+    stage.paint(members);
   };
   const onPresence = (m) => paintPeople(m);
   const onMessage = (m) => { $('#chat-empty')?.remove(); addMsg(m); };
@@ -577,17 +583,31 @@ async function renderRoom(main, roomId) {
     if (r.error) toast(r.error, 'err'); else inp.value = '';
   });
 
-  const paintAudio = () => {
-    $('#audio-bar').innerHTML = rtc.active
-      ? `<span class="live">On voice</span><button class="btn" data-a="mute">${rtc.muted ? 'Unmute' : 'Mute'}</button><button class="btn danger" data-a="leave">Leave voice</button>`
-      : `<button class="btn" data-a="join"><svg><use href="#i-mic"/></svg>Join voice</button><small>Uses your microphone only after you click. ${state.me.voiceMode === 'livekit' ? 'Voice runs through a media server, so big rooms work.' : 'Best for up to 6 people.'}</small>`;
+  const paintCall_ = () => {
+    const bar = $('#call-bar');
+    if (!bar) return;
+    const big = state.me.voiceMode === 'livekit';
+    bar.innerHTML = rtc.active
+      ? `<button class="btn ${rtc.camOn ? '' : 'off'}" data-a="cam" aria-pressed="${rtc.camOn}"><svg><use href="#${rtc.camOn ? 'i-cam' : 'i-cam-off'}"/></svg>${rtc.camOn ? 'Camera on' : 'Camera off'}</button>
+         <button class="btn ${rtc.micOn ? '' : 'off'}" data-a="mic" aria-pressed="${rtc.micOn}"><svg><use href="#${rtc.micOn ? 'i-mic' : 'i-mic-off'}"/></svg>${rtc.micOn ? 'Mic on' : 'Mic off'}</button>
+         <button class="btn danger" data-a="leave">Leave call</button>`
+      : `<button class="btn grow" data-a="join-cam"><svg><use href="#i-cam"/></svg>Join with camera</button>
+         <button class="btn" data-a="join">Join without camera</button>
+         <small>Your camera and mic are used only after you click. ${big ? 'Calls run through a media server, so big rooms work.' : 'Best for up to 6 people on the call.'}</small>`;
   };
-  paintAudio();
-  $('#audio-bar').addEventListener('click', async (e) => {
-    const a = e.target.closest('[data-a]')?.dataset.a;
-    if (a === 'join') { e.target.closest('button').disabled = true; await rtc.join(roomId, paintAudio); paintAudio(); }
-    if (a === 'leave') { rtc.leave(); paintAudio(); }
-    if (a === 'mute') { rtc.setMuted(!rtc.muted); paintAudio(); }
+  paintCall = paintCall_;
+  paintCall_();
+  $('#call-bar').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-a]');
+    if (!btn) return;
+    const a = btn.dataset.a;
+    btn.disabled = true;
+    if (a === 'join-cam' || a === 'join') await rtc.join(roomId, { camera: a === 'join-cam' });
+    if (a === 'leave') rtc.leave();
+    if (a === 'mic') await rtc.setMic(!rtc.micOn);
+    if (a === 'cam') await rtc.setCam(!rtc.camOn);
+    paintCall_();
+    stage.refresh();
   });
   const tick = setInterval(() => paintPeople(lastMembers), 30000); // refresh "min left"
 
@@ -595,136 +615,238 @@ async function renderRoom(main, roomId) {
     clearInterval(tick);
     state.socket?.off('room:presence', onPresence);
     state.socket?.off('room:message', onMessage);
+    paintCall = null;
     if (!location.hash.startsWith(`#/rooms/${roomId}`)) { rtc.leave(); state.socket?.emit('room:leave'); rooms.current = null; }
   });
 }
 
-// ---------------------------------------------------------------- Voice
-// rtc picks the transport: LiveKit (SFU) when the server has it configured, otherwise peer-to-peer mesh.
+// ---------------------------------------------------------------- Live call (camera + mic)
+// Study-room style: cameras on, mics off by default. rtc picks the transport: LiveKit (SFU) when the
+// server has it configured, otherwise a peer-to-peer mesh (fine for ~6 people).
+const VIDEO = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 15, max: 20 }, facingMode: 'user' };
+const AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
+const mediaError = (e, what) => toast(e?.name === 'NotAllowedError'
+  ? `${what === 'camera' ? 'Camera' : 'Microphone'} access was blocked. Allow it in your browser's site settings and try again.`
+  : e?.name === 'NotFoundError' ? `No ${what} found on this device.`
+  : e?.name === 'NotReadableError' ? `Your ${what} is being used by another app.`
+  : `Could not start the ${what}: ${e?.message || e}`, 'err');
+
+// The video grid: one tile per person on the call, keyed by socket id.
+const stage = {
+  members: [], local: null, streams: new Map(), // remote: socketId (mesh) or 'user-<id>' (LiveKit) -> MediaStream
+  refresh() { this.paint(this.members); },
+  paint(members) {
+    this.members = members;
+    const el = document.getElementById('stage');
+    if (!el) return;
+    const meId = state.socket?.id;
+    const onCall = members.filter((m) => m.audio);
+    el.dataset.count = String(Math.min(onCall.length, 9));
+    const keep = new Set();
+    for (const m of onCall) {
+      const key = m.socketId;
+      keep.add(key);
+      let tile = el.querySelector(`[data-key="${CSS.escape(key)}"]`);
+      if (!tile) {
+        tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.dataset.key = key;
+        tile.innerHTML = `<video autoplay playsinline muted></video><div class="tile-face"></div><div class="tile-name"></div>`;
+        el.append(tile);
+      }
+      const mine = key === meId;
+      const src = mine ? this.local : this.streams.get(key) || this.streams.get(`user-${m.userId}`);
+      const v = tile.querySelector('video');
+      const showVideo = !!(m.video && src && src.getVideoTracks().length);
+      if (showVideo && v.srcObject !== src) { v.srcObject = src; v.play().catch(() => {}); }
+      if (!showVideo && v.srcObject) v.srcObject = null;
+      tile.classList.toggle('has-video', showVideo);
+      tile.classList.toggle('mine', mine);
+      tile.querySelector('.tile-face').textContent = initials(m.name);
+      const mins = m.focusEndsAt ? Math.max(0, Math.ceil((m.focusEndsAt - Date.now()) / 60000)) : null;
+      tile.querySelector('.tile-name').innerHTML = `${m.muted ? '<svg class="mic-off" aria-label="mic off"><use href="#i-mic-off"/></svg>' : '<svg aria-label="mic on"><use href="#i-mic"/></svg>'}
+        <span>${esc(mine ? 'You' : m.name)}</span>${m.focusing ? `<em>${mins != null ? `${mins}m` : 'focusing'}</em>` : ''}`;
+    }
+    el.querySelectorAll('.tile').forEach((t) => { if (!keep.has(t.dataset.key)) { const v = t.querySelector('video'); v.srcObject = null; t.remove(); } });
+    const empty = document.getElementById('stage-empty');
+    if (empty) empty.hidden = onCall.length > 0;
+  },
+  clear() { this.local = null; this.streams.clear(); this.refresh(); },
+};
+
 const rtc = {
   impl: null,
   get active() { return !!this.impl?.active; },
-  get muted() { return !!this.impl?.muted; },
-  async join(roomId, onChange) {
-    if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) return toast('This browser does not support voice rooms.', 'err');
+  get micOn() { return !!this.impl?.micOn; },
+  get camOn() { return !!this.impl?.camOn; },
+  async join(roomId, { camera }) {
+    if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) return toast('This browser does not support live rooms.', 'err');
     let cfg;
     try { cfg = await api('GET', `/rooms/${encodeURIComponent(roomId)}/voice`); } catch (e) { return fail(e); }
     this.impl = cfg.mode === 'livekit' ? lk : mesh;
-    await this.impl.join(cfg, onChange);
+    await this.impl.join(cfg, { camera });
+    if (!this.impl?.active) this.impl = null;
   },
-  setMuted(m) { this.impl?.setMuted(m); },
-  leave() { mesh.leave(); lk.leave(); this.impl = null; },
+  async setMic(on) { await this.impl?.setMic(on); },
+  async setCam(on) { await this.impl?.setCam(on); },
+  leave() { mesh.leave(); lk.leave(); this.impl = null; stage.clear(); },
   onSignal(m) { mesh.onSignal(m); },
   dropPeer(id) { mesh.dropPeer(id); },
 };
 
-const micError = (e) => toast(e?.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in your browser settings to join voice.' : `Could not start the microphone: ${e?.message || e}`, 'err');
-
-// LiveKit SFU voice.
+// LiveKit SFU.
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = Object.assign(document.createElement('script'), { src, onload: resolve, onerror: () => reject(new Error('Could not load the voice library.')) });
+    const s = Object.assign(document.createElement('script'), { src, onload: resolve, onerror: () => reject(new Error('Could not load the call library.')) });
     document.head.append(s);
   });
 }
 const lk = {
-  room: null, muted: false,
+  room: null, micOn: false, camOn: false,
   get active() { return !!this.room; },
-  async join(cfg, onChange) {
+  status() { state.socket?.emit('voice:status', { on: !!this.room, muted: !this.micOn, video: this.camOn }); },
+  localVideo() {
+    const t = this.room?.localParticipant.getTrackPublication(window.LivekitClient.Track.Source.Camera)?.track;
+    stage.local = this.camOn && t ? new MediaStream([t.mediaStreamTrack]) : null;
+  },
+  async join(cfg, { camera }) {
     try { await loadScript('/vendor/livekit-client.umd.js'); } catch (e) { return toast(e.message, 'err'); }
     const { Room, RoomEvent, Track } = window.LivekitClient;
-    const room = new Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const room = new Room({ adaptiveStream: false, dynacast: true, audioCaptureDefaults: AUDIO, videoCaptureDefaults: { resolution: { width: 640, height: 360, frameRate: 15 } } });
     room.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
-      if (track.kind !== Track.Kind.Audio) return;
-      const el = track.attach();
-      el.dataset.lk = '1';
-      el.dataset.identity = participant.identity;
-      $('#audio-sinks').append(el);
+      if (track.kind === Track.Kind.Audio) {
+        const el = track.attach();
+        el.dataset.lk = '1';
+        el.dataset.identity = participant.identity;
+        $('#audio-sinks').append(el);
+      } else if (track.kind === Track.Kind.Video) {
+        stage.streams.set(participant.identity, new MediaStream([track.mediaStreamTrack]));
+        stage.refresh();
+      }
     });
-    room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
-    room.on(RoomEvent.ParticipantDisconnected, (participant) =>
-      $$('#audio-sinks [data-lk]').filter((el) => el.dataset.identity === participant.identity).forEach((el) => { el.srcObject = null; el.remove(); }));
+    room.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+      if (track.kind === Track.Kind.Video) { stage.streams.delete(participant.identity); stage.refresh(); }
+      track.detach().forEach((el) => el.remove());
+    });
+    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      stage.streams.delete(participant.identity);
+      $$('#audio-sinks [data-lk]').filter((el) => el.dataset.identity === participant.identity).forEach((el) => { el.srcObject = null; el.remove(); });
+      stage.refresh();
+    });
     room.on(RoomEvent.Disconnected, () => {
       if (this.room !== room) return;
       this.room = null;
       $$('#audio-sinks [data-lk]').forEach((el) => el.remove());
-      state.socket?.emit('voice:status', { on: false });
-      toast('Voice disconnected.');
-      onChange?.();
+      this.micOn = this.camOn = false;
+      this.status();
+      stage.clear();
+      toast('Call disconnected.');
+      paintCall?.();
     });
     try {
       await room.connect(cfg.url, cfg.token);
     } catch (e) {
-      return toast(`Could not reach the voice server: ${e.message}`, 'err');
-    }
-    try {
-      await room.localParticipant.setMicrophoneEnabled(true);
-    } catch (e) {
-      await room.disconnect();
-      return micError(e);
+      return toast(`Could not reach the call server: ${e.message}`, 'err');
     }
     this.room = room;
-    this.muted = false;
+    this.micOn = false;
+    this.camOn = false;
+    if (camera) {
+      try { await room.localParticipant.setCameraEnabled(true); this.camOn = true; } catch (e) { mediaError(e, 'camera'); }
+    }
+    this.localVideo();
     room.startAudio().catch(() => {});
-    state.socket?.emit('voice:status', { on: true, muted: false });
-    const others = room.remoteParticipants.size;
-    toast(others ? `Connected to voice with ${others} ${others === 1 ? 'person' : 'people'}` : "You're on voice. Others will hear you when they join.");
+    this.status();
+    stage.refresh();
   },
-  async setMuted(m) {
+  async setMic(on) {
     if (!this.room) return;
-    this.muted = m;
-    await this.room.localParticipant.setMicrophoneEnabled(!m);
-    state.socket?.emit('voice:status', { on: true, muted: m });
+    try { await this.room.localParticipant.setMicrophoneEnabled(on); this.micOn = on; } catch (e) { mediaError(e, 'microphone'); }
+    this.status();
+  },
+  async setCam(on) {
+    if (!this.room) return;
+    try { await this.room.localParticipant.setCameraEnabled(on); this.camOn = on; } catch (e) { mediaError(e, 'camera'); }
+    this.localVideo();
+    this.status();
+    stage.refresh();
   },
   leave() {
     if (!this.room) return;
     const r = this.room;
     this.room = null;
+    this.micOn = this.camOn = false;
     r.disconnect().catch(() => {});
     $$('#audio-sinks [data-lk]').forEach((el) => el.remove());
     state.socket?.emit('voice:status', { on: false });
   },
 };
 
-// Peer-to-peer mesh voice (no media server needed).
+// Peer-to-peer mesh (no media server). Every connection has one audio and one video slot, so turning the
+// camera or mic on later just swaps the track in (no renegotiation).
 const mesh = {
-  get active() { return !!this.stream; },
-  stream: null, pcs: new Map(), ice: null, muted: false,
-  async join() {
-    try {
-      this.ice ??= await api('GET', '/rtc-config');
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-    } catch (e) {
-      this.stream = null;
-      return micError(e);
-    }
-    const r = await emitAck('audio:join');
-    if (r.error) { this.stopStream(); return toast(r.error, 'err'); }
-    this.muted = false;
+  active: false, pcs: new Map(), ice: null, audio: null, video: null, micOn: false, camOn: false,
+  async join(cfg, { camera }) {
+    try { this.ice ??= await api('GET', '/rtc-config'); } catch (e) { return fail(e); }
+    if (camera) await this.startCamera();
+    const r = await emitAck('audio:join', { video: this.camOn, muted: true });
+    if (r.error) { this.stopTracks(); return toast(r.error, 'err'); }
+    this.active = true;
+    this.micOn = false;
     for (const p of r.peers) this.connect(p.socketId, true);
-    toast(r.peers.length ? `Connected to voice with ${r.peers.length} ${r.peers.length === 1 ? 'person' : 'people'}` : "You're on voice. Others will hear you when they join.");
+    stage.refresh();
+  },
+  async startCamera() {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: VIDEO, audio: false });
+      this.video = s.getVideoTracks()[0];
+      this.camOn = true;
+      stage.local = new MediaStream([this.video]);
+      return true;
+    } catch (e) {
+      mediaError(e, 'camera');
+      return false;
+    }
+  },
+  senders(kind) { return [...this.pcs.values()].flatMap((pc) => pc.getTransceivers().filter((t) => (t.receiver.track?.kind) === kind).map((t) => t.sender)); },
+  attach(pc) {
+    for (const t of pc.getTransceivers()) {
+      const kind = t.receiver.track?.kind;
+      if (!kind || t.stopped) continue;
+      t.direction = 'sendrecv';
+      t.sender.replaceTrack(kind === 'audio' ? this.audio : this.camOn ? this.video : null).catch(() => {});
+    }
   },
   connect(peerId, initiator) {
     const pc = new RTCPeerConnection(this.ice);
     this.pcs.set(peerId, pc);
-    this.stream.getTracks().forEach((t) => pc.addTrack(t, this.stream));
     pc.onicecandidate = (e) => e.candidate && state.socket.emit('rtc:signal', { to: peerId, data: { candidate: e.candidate.toJSON() } });
     pc.ontrack = (e) => {
-      let el = document.getElementById('audio-' + peerId);
-      if (!el) { el = document.createElement('audio'); el.id = 'audio-' + peerId; el.autoplay = true; $('#audio-sinks').append(el); }
-      el.srcObject = e.streams[0];
-      el.play().catch(() => {});
+      if (e.track.kind === 'audio') {
+        let el = document.getElementById('audio-' + peerId);
+        if (!el) { el = document.createElement('audio'); el.id = 'audio-' + peerId; el.autoplay = true; $('#audio-sinks').append(el); }
+        el.srcObject = new MediaStream([e.track]);
+        el.play().catch(() => {});
+      } else {
+        stage.streams.set(peerId, new MediaStream([e.track]));
+        e.track.onunmute = () => stage.refresh();
+        stage.refresh();
+      }
     };
     pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState)) this.dropPeer(peerId); };
     if (initiator) {
+      pc.addTransceiver('audio', { direction: 'sendrecv' });
+      pc.addTransceiver('video', { direction: 'sendrecv' });
+      this.attach(pc);
       pc.createOffer().then((o) => pc.setLocalDescription(o)).then(() =>
-        state.socket.emit('rtc:signal', { to: peerId, data: { sdp: pc.localDescription.toJSON() } }));
+        state.socket.emit('rtc:signal', { to: peerId, data: { sdp: pc.localDescription.toJSON() } })).catch((e) => console.warn('offer failed', e));
     }
     return pc;
   },
   async onSignal({ from, data }) {
-    if (!this.stream) return;
+    if (!this.active) return;
     let pc = this.pcs.get(from);
     try {
       if (data.sdp) {
@@ -732,6 +854,7 @@ const mesh = {
         if (!pc) return;
         await pc.setRemoteDescription(data.sdp);
         if (data.sdp.type === 'offer') {
+          this.attach(pc);
           await pc.setLocalDescription(await pc.createAnswer());
           state.socket.emit('rtc:signal', { to: from, data: { sdp: pc.localDescription.toJSON() } });
         }
@@ -743,21 +866,49 @@ const mesh = {
   dropPeer(id) {
     this.pcs.get(id)?.close();
     this.pcs.delete(id);
+    stage.streams.delete(id);
     document.getElementById('audio-' + id)?.remove();
+    stage.refresh();
   },
-  setMuted(m) {
-    this.muted = m;
-    this.stream?.getAudioTracks().forEach((t) => (t.enabled = !m));
-    state.socket?.emit('audio:mute', { muted: m });
+  async setMic(on) {
+    if (on && !this.audio) {
+      try {
+        this.audio = (await navigator.mediaDevices.getUserMedia({ audio: AUDIO, video: false })).getAudioTracks()[0];
+      } catch (e) { return mediaError(e, 'microphone'); }
+      this.senders('audio').forEach((s) => s.replaceTrack(this.audio).catch(() => {}));
+    }
+    this.micOn = on;
+    if (this.audio) this.audio.enabled = on;
+    state.socket?.emit('audio:mute', { muted: !on });
   },
-  stopStream() { this.stream?.getTracks().forEach((t) => t.stop()); this.stream = null; },
+  async setCam(on) {
+    if (on) {
+      if (!(await this.startCamera())) return;
+    } else {
+      this.video?.stop(); // turns the camera light off
+      this.video = null;
+      this.camOn = false;
+      stage.local = null;
+    }
+    this.senders('video').forEach((s) => s.replaceTrack(on ? this.video : null).catch(() => {}));
+    state.socket?.emit('audio:mute', { video: this.camOn });
+    stage.refresh();
+  },
+  stopTracks() {
+    this.audio?.stop(); this.video?.stop();
+    this.audio = this.video = null;
+    this.micOn = this.camOn = false;
+    stage.local = null;
+  },
   leave() {
-    if (!this.stream && !this.pcs.size) return;
+    if (!this.active && !this.pcs.size && !this.audio && !this.video) return;
     [...this.pcs.keys()].forEach((id) => this.dropPeer(id));
-    this.stopStream();
-    state.socket?.emit('audio:leave');
+    this.stopTracks();
+    if (this.active) state.socket?.emit('audio:leave');
+    this.active = false;
   },
 };
+let paintCall = null; // set by the open room page
 
 // ---------------------------------------------------------------- Community
 VIEWS.community = async (main) => {
@@ -1283,7 +1434,7 @@ VIEWS.privacy = async (main) => {
           <button class="btn danger" id="del-account">Delete my account</button></section>
       </div>
       <aside class="stack">
-        <section class="note"><p><strong>What isn't collected.</strong> Synapse doesn't read other apps, other browser tabs, your location or your contacts. The microphone is used only while you're in a voice room, and audio goes directly between participants rather than through this server.</p>
+        <section class="note"><p><strong>What isn't collected.</strong> Synapse doesn't read other apps, other browser tabs, your location or your contacts. The camera and microphone are used only while you're on a room call and you've switched them on. Video and audio go directly between participants (or through the room's media server if one is set up) and are never recorded or stored.</p>
           <p style="margin:0"><strong>Not a medical tool.</strong> Insights describe patterns in your own data and can't diagnose burnout or any condition. If you're struggling, talk to someone you trust or a professional.</p></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Consent history</h2>
           ${log.length ? `<ul class="session-log">${log.map((l) => `<li><span>${esc(FIELD[l.field] || l.field)} turned ${l.value ? 'on' : 'off'}</span><span class="muted">${ago(l.changed_at)}</span></li>`).join('')}</ul>` : '<p class="empty">No changes yet.</p>'}</section>

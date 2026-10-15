@@ -202,8 +202,14 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert(rooms.data.find((r) => r.id === 'deep-work').members.length === 2);
     // audio signaling
     const ja = await emit(sa, 'audio:join');
-    const jb = await emit(sb, 'audio:join');
+    const pres = new Promise((r) => sa.on('room:presence', (m) => { const b = m.find((x) => x.socketId === sb.id); if (b?.audio) r(b); }));
+    const jb = await emit(sb, 'audio:join', { video: true, muted: true });
     assert(ja.ok && jb.peers.length === 1 && jb.peers[0].socketId === sa.id);
+    const bp = await pres;
+    assert(bp.video === true && bp.muted === true, 'camera on, mic off by default: ' + JSON.stringify(bp));
+    const camOff = new Promise((r) => sa.on('room:presence', (m) => { const b = m.find((x) => x.socketId === sb.id); if (b && !b.video) r(b); }));
+    sb.emit('audio:mute', { video: false });
+    assert((await camOff).muted === true, 'turning the camera off keeps mic state');
     const sig = new Promise((r) => sa.on('rtc:signal', r));
     sb.emit('rtc:signal', { to: sa.id, data: { type: 'offer', sdp: 'v=0' } });
     assert((await sig).from === sb.id);

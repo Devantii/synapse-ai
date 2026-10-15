@@ -2,16 +2,16 @@
 
 [![CI](https://github.com/Devantii/synapse-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Devantii/synapse-ai/actions/workflows/ci.yml)
 
-A digital burnout prevention system: Pomodoro focus timer with restorative breaks, a growing tree garden, live focus rooms with chat and optional voice, a supportive community feed, screen-time logging, and explainable wellbeing insights from a machine-learning model plus fuzzy logic.
+A digital burnout prevention system: Pomodoro focus timer with restorative breaks, a growing tree garden, live focus rooms with camera video (study-together style), chat and optional voice, a supportive community feed, screen-time logging, and explainable wellbeing insights from a machine-learning model plus fuzzy logic.
 
-One Node.js server (Express + Socket.IO, with PostgreSQL or SQLite) serves both the API and the responsive web dashboard, so there is a single URL and no separate frontend build. A browser extension and a Windows desktop tracker add automatic screen-time measurement, and an optional LiveKit server scales voice rooms.
+One Node.js server (Express + Socket.IO, with PostgreSQL or SQLite) serves both the API and the responsive web dashboard, so there is a single URL and no separate frontend build. A browser extension and a Windows desktop tracker add automatic screen-time measurement, and an optional LiveKit server scales video/voice rooms.
 
 ```
 synapse-ai/
 ├── extension/           Chrome/Edge extension: automatic per-website time      → extension/README.md
 ├── desktop-tracker/     Windows + macOS tracker: automatic per-app time (Python, stdlib) → desktop-tracker/README.md
 ├── android/             Android app: automatic per-app phone time (Java, no libraries) → android/README.md
-├── infra/livekit/       optional media server for large voice rooms             → infra/livekit/README.md
+├── infra/livekit/       optional media server for large video rooms             → infra/livekit/README.md
 └── backend/
     ├── src/
     │   ├── server.js        Express app, security headers, static dashboard, ICE config
@@ -66,8 +66,8 @@ Set these in `backend/.env` (see `.env.example`). Keep `.env` out of source cont
 | `DB_PATH` | Optional | SQLite file location when `DATABASE_URL` isn't set. |
 | `OPENAI_API_KEY` | Optional | Enables AI-written coach replies. Without it the coach replies from your insights and says so. |
 | `OPENAI_MODEL`, `OPENAI_BASE_URL` | Optional | Any OpenAI-compatible Chat Completions endpoint. |
-| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Optional | Run voice through a LiveKit media server (large rooms, more networks). Unset = peer-to-peer. See `infra/livekit/README.md`. |
-| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | Optional | TURN relay for peer-to-peer voice on strict networks. Public STUN is used by default. |
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Optional | Run room video and voice through a LiveKit media server (large rooms, more networks). Unset = peer-to-peer. See `infra/livekit/README.md`. |
+| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | Optional | TURN relay for peer-to-peer video/voice on strict networks. Public STUN is used by default. |
 | `TRUST_PROXY` | When behind a proxy | Lets rate limiting see real client IPs. |
 | `CORS_ORIGIN` | Rarely | Only if you serve the dashboard from another origin. |
 
@@ -81,7 +81,7 @@ Everything below is functional against the real database, not mocked.
 - **Progress page:** a 6-month focus calendar heatmap, focus vs screen time by week (with a table view), your strongest focus hours, which block lengths you actually finish, and your top topics. Hover or tap anything for details.
 - **Installable app:** install Synapse from the browser (desktop "Install app" button, or Add to Home Screen on phones). It opens in its own window and still loads offline. Optional notifications when a focus block or break ends while the tab is in the background.
 - **Gamification:** points (completed focus = minutes + 10, breaks = 5, early stop = half), levels, day streaks, a garden where blocks of 20+ minutes plant a sapling, maple, cedar or oak, and 10 milestones. Points are capped at 400 a day so grinding is never rewarded over rest.
-- **Focus rooms:** live presence (including who is mid-focus and minutes left), persisted chat with flood control, and optional voice. The microphone is requested only when you click "Join voice". Without LiveKit, audio goes peer to peer (up to 6 people) and the server only relays signaling. With LiveKit configured, rooms scale to many people; Synapse only issues 2-hour, microphone-only join tokens.
+- **Focus rooms:** live presence (including who is mid-focus and minutes left), persisted chat with flood control, and a study-together video call: "Join with camera" shows everyone on camera in a grid, mics start off (quiet room) and can be switched on, and you can join without a camera to just watch. Camera and mic are requested only when you click. Without LiveKit, video and audio go peer to peer (up to 6 people on the call) and the server only relays signaling; nothing is recorded. With LiveKit configured, rooms scale to many people; Synapse only issues 2-hour camera + microphone join tokens (no screen share).
 - **Community:** mood-tagged check-ins, Cheer / Hug / Same-here reactions, live "new check-ins" notice, delete your own posts, and an option to post anonymously.
 - **Screen time:** enter daily totals per app or site with categories, edit any day in the last 90, delete entries, and see a 14-day stacked chart. The dashboard also measures its own foreground time (only while the tab is visible and focused).
 - **Daily limits:** set minutes per app or site on the Screen time page; progress counts all sources. With the extension, you get a notification at 80% and the site pauses at 100% until midnight, with a 5-minute escape hatch.
@@ -101,7 +101,7 @@ Everything below is functional against the real database, not mocked.
 | Time per website (Chrome, Edge, Brave) | **Built:** `extension/`. Load unpacked in developer mode, or publish to the Chrome Web Store / Edge Add-ons. |
 | Time per desktop app on Windows and macOS | **Built:** `desktop-tracker/`. Python standard library; can be packaged as an .exe on Windows. |
 | Android app usage | **Built:** `android/`. Uses Usage Access; CI builds the APK and publishes it at `/releases/tag/android-latest`. |
-| Voice for big groups or strict networks | **Built:** set `LIVEKIT_*` (LiveKit Cloud or self-hosted). |
+| Video/voice for big groups or strict networks | **Built:** set `LIVEKIT_*` (LiveKit Cloud or self-hosted). |
 | Firefox / Safari | Not built. Firefox would need small manifest changes; Safari needs an Xcode-wrapped extension. |
 | Linux desktop apps | Not built. The tracker's logic is portable; it would need an X11/Wayland foreground and idle layer. |
 | iPhone app usage | Not possible for ordinary apps. Apple's Screen Time API needs a special entitlement and doesn't export per-app numbers. Users keep entering phone totals by hand. |
