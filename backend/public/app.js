@@ -167,6 +167,7 @@ async function enterApp(isNew) {
 
 function signOut(msg) {
   foreground.flush();
+  ambient.stop();
   rtc.leave();
   state.socket?.disconnect();
   state.socket = null;
@@ -268,6 +269,7 @@ const timer = {
         const res = await api('POST', '/sessions', {
           kind: s.mode, plannedMin: s.planned, actualMin: completed ? s.planned : Math.round(actual * 100) / 100, completed,
           tag: s.tag || undefined, day: localDay(started), startedAt: localTs(started), endedAt: localTs(),
+          taskId: s.mode === 'focus' && s.taskId ? s.taskId : undefined,
         });
         state.me.rewards = res.rewards;
         if (s.mode === 'focus' && completed) toast(res.tree ? `+${res.earned} points and a new ${res.tree.species} in your garden` : `+${res.earned} points`, 'win');
@@ -306,6 +308,97 @@ function chime() {
     });
   } catch {}
 }
+
+// ---------------------------------------------------------------- Ambient sounds
+// Generated live with the Web Audio API (no audio files): rain, ocean waves, wind and brown noise.
+const ambient = {
+  SOUNDS: { rain: 'Rain', waves: 'Waves', wind: 'Wind', brown: 'Brown noise' },
+  ctx: null, master: null, nodes: [], kind: null,
+  vol: store.get('synapse.ambient')?.vol ?? 0.5,
+  buffer(brown) {
+    const ctx = this.ctx, len = ctx.sampleRate * 4, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      if (brown) { last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; } else d[i] = w;
+    }
+    return buf;
+  },
+  source(brown) { const s = this.ctx.createBufferSource(); s.buffer = this.buffer(brown); s.loop = true; this.nodes.push(s); return s; },
+  lfo(freq, depth, target) {
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.frequency.value = freq; g.gain.value = depth; o.connect(g).connect(target); o.start(); this.nodes.push(o);
+  },
+  play(kind) {
+    this.stop(true);
+    if (!kind || !this.SOUNDS[kind]) return this.paint();
+    this.ctx ??= new (window.AudioContext || window.webkitAudioContext)();
+    this.ctx.resume();
+    const ctx = this.ctx;
+    this.master = ctx.createGain();
+    this.master.gain.value = 0;
+    this.master.gain.linearRampToValueAtTime(this.vol * 0.6, ctx.currentTime + 1.5); // fade in
+    this.master.connect(ctx.destination);
+    if (kind === 'brown') this.source(true).connect(this.master);
+    if (kind === 'rain') {
+      const hiss = this.source(false), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+      bp.type = 'bandpass'; bp.frequency.value = 2600; bp.Q.value = 0.5; g.gain.value = 0.35;
+      hiss.connect(bp).connect(g).connect(this.master);
+      const body = this.source(true), lp = ctx.createBiquadFilter(), g2 = ctx.createGain();
+      lp.type = 'lowpass'; lp.frequency.value = 900; g2.gain.value = 0.6;
+      body.connect(lp).connect(g2).connect(this.master);
+      this.lfo(0.13, 0.08, g.gain);
+    }
+    if (kind === 'waves') {
+      const n = this.source(true), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+      lp.type = 'lowpass'; lp.frequency.value = 700; g.gain.value = 0.55;
+      n.connect(lp).connect(g).connect(this.master);
+      this.lfo(0.09, 0.45, g.gain); // slow swell
+      this.lfo(0.09, 350, lp.frequency);
+    }
+    if (kind === 'wind') {
+      const n = this.source(false), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+      bp.type = 'bandpass'; bp.frequency.value = 600; bp.Q.value = 1.2; g.gain.value = 0.5;
+      n.connect(bp).connect(g).connect(this.master);
+      this.lfo(0.05, 300, bp.frequency);
+      this.lfo(0.11, 0.25, g.gain);
+    }
+    this.nodes.forEach((x) => x.start && !(x instanceof OscillatorNode) && x.start());
+    this.kind = kind;
+    this.save(); this.paint();
+  },
+  stop(quick) {
+    const old = this.nodes, master = this.master;
+    this.nodes = []; this.master = null; this.kind = null;
+    if (master && this.ctx) {
+      master.gain.cancelScheduledValues(this.ctx.currentTime);
+      master.gain.setTargetAtTime(0, this.ctx.currentTime, quick ? 0.05 : 0.3);
+      setTimeout(() => { old.forEach((x) => { try { x.stop(); } catch {} }); master.disconnect(); }, quick ? 300 : 1500);
+    }
+    if (!quick) { this.save(); this.paint(); }
+  },
+  setVol(v) {
+    this.vol = v;
+    if (this.master && this.ctx) this.master.gain.setTargetAtTime(v * 0.6, this.ctx.currentTime, 0.1);
+    this.save();
+  },
+  save() { store.set('synapse.ambient', { vol: this.vol }); },
+  paint() {
+    $$('[data-amb]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.amb || null) === this.kind || (!b.dataset.amb && !this.kind))));
+    $$('.amb-vol').forEach((r) => { r.disabled = !this.kind; });
+  },
+  controls() {
+    return `<div class="ambient"><span class="amb-label"><svg aria-hidden="true"><use href="#i-sound"/></svg>Sounds</span>
+      <div class="chips">${Object.entries(this.SOUNDS).map(([k, v]) => `<button type="button" class="chip" data-amb="${k}" aria-pressed="${this.kind === k}">${v}</button>`).join('')}
+      <button type="button" class="chip" data-amb="" aria-pressed="${!this.kind}">Off</button></div>
+      <input type="range" class="amb-vol" min="0" max="1" step="0.05" value="${this.vol}" aria-label="Sound volume" ${this.kind ? '' : 'disabled'} /></div>`;
+  },
+};
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-amb]');
+  if (b) ambient.play(b.dataset.amb || null);
+});
+document.addEventListener('input', (e) => { if (e.target.classList?.contains('amb-vol')) ambient.setVol(+e.target.value); });
 
 function speciesFor(min) { return min >= 50 ? 'oak' : min >= 40 ? 'cedar' : min >= 30 ? 'maple' : 'sapling'; }
 
@@ -494,10 +587,11 @@ VIEWS.today = async (main) => {
           <input id="tag" maxlength="40" placeholder="Chapter 3 notes" value="${esc(timer.s.tag)}" /></label>
         <div class="timer-controls"></div>
         <div id="break-guide" class="break-guide" hidden></div>
+        ${ambient.controls()}
       </section>
       <section class="today-side" id="today-side"></section>
     </div>`;
-  $('#tag').addEventListener('input', (e) => { timer.s.tag = e.target.value; timer.save(); });
+  $('#tag').addEventListener('input', (e) => { timer.s.tag = e.target.value; timer.s.taskId = null; timer.save(); $$('.task.current').forEach((x) => x.classList.remove('current')); });
   main.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -516,8 +610,10 @@ VIEWS.today = async (main) => {
 async function renderTodaySide() {
   const side = $('#today-side');
   if (!side) return;
-  const [rewards, sessions] = await Promise.all([api('GET', '/rewards'), api('GET', '/sessions?days=2')]);
-  side.onclick = (e) => { if (e.target.closest('#notify-on')) enableNotifications(); };
+  const [rewards, sessions, tasks] = await Promise.all([api('GET', '/rewards'), api('GET', '/sessions?days=2'), api('GET', `/tasks?day=${localDay()}`)]);
+  side.onclick = (e) => { if (e.target.closest('#notify-on')) enableNotifications(); taskClick(e); };
+  side.onsubmit = taskSubmit;
+  side.onchange = taskChange;
   state.me.rewards = rewards;
   const today = sessions.filter((s) => s.day === localDay());
   const focusMin = today.filter((s) => s.kind === 'focus' && s.completed).reduce((a, s) => a + s.actual_min, 0);
@@ -527,6 +623,7 @@ async function renderTodaySide() {
   side.innerHTML = `
     <h1>${greet}, ${esc(state.me.user.displayName)}.</h1>
     <p class="muted">${hour >= 22 ? "It's late. A short wind-down session is better than a long push." : 'Work in blocks and take the break when the timer offers it.'}</p>
+    ${goalHtml(focusMin)}
     <div class="statline">
       <div><b class="num">${fmtMin(focusMin)}</b><span>focused today</span></div>
       <div><b class="num">${breaks}</b><span>breaks taken</span></div>
@@ -537,6 +634,7 @@ async function renderTodaySide() {
       <div class="level-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(rewards.progress * 100)}" aria-label="Progress to next level"><i style="width:${Math.round(rewards.progress * 100)}%"></i></div>
       <small>${rewards.trees} ${rewards.trees === 1 ? 'tree' : 'trees'} grown · best streak ${rewards.bestStreak} days</small>
     </div>
+    ${tasksHtml(tasks)}
     <h2 style="margin-top:28px;font-size:var(--step-1)">Today's sessions</h2>
     ${today.length ? `<ul class="session-log">${today.map((s) => `
       <li><span><i class="dot ${s.kind === 'break' ? 'break' : s.completed ? '' : 'abandoned'}"></i>${s.kind === 'break' ? 'Break' : esc(s.tag || 'Focus')}${s.completed ? '' : ' (ended early)'}</span>
@@ -544,6 +642,96 @@ async function renderTodaySide() {
       : `<p class="empty">No sessions yet today. A 15-minute block is a good way in.</p>`}
     ${notifySupported() && Notification.permission === 'default' ? `<p class="note" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span>Get a notification when a session ends, even if this tab is in the background.</span><button class="btn" id="notify-on">Turn on</button></p>` : ''}
     ${state.me.consents.activity_tracking ? '' : `<p class="note"><strong>Sessions aren't being saved.</strong> Turn on "Save focus activity" in <a href="#/privacy">Privacy</a> to earn points and grow trees.</p>`}`;
+}
+
+// Weekly focus leaderboard (opt-in, completed focus blocks Monday to Sunday).
+async function renderLeaderboard() {
+  const el = $('#leaderboard');
+  if (!el) return;
+  const now = new Date();
+  const from = shiftDay(localDay(now), -((now.getDay() + 6) % 7));
+  let lb;
+  try { lb = await api('GET', `/leaderboard?from=${from}`); } catch { return; }
+  const myRow = lb.rows.find((r) => r.isMe);
+  el.innerHTML = `<div class="lb-head"><div><h2 style="font-size:var(--step-1);margin:0">This week's focus</h2>
+      <p class="muted" style="margin:4px 0 0;font-size:var(--step--1)">Completed focus blocks since Monday. Only people who opt in are listed, by display name.</p></div>
+      <label class="switch lb-switch"><strong>Show me</strong><input type="checkbox" id="lb-opt" ${lb.optedIn ? 'checked' : ''} /></label></div>
+    ${lb.rows.length ? `<ol class="lb">${lb.rows.map((r) => `<li class="${r.isMe ? 'me' : ''}"><span class="rank num">${r.rank}</span><span class="face">${esc(initials(r.name))}</span>
+        <span class="lb-name">${esc(r.name)}${r.isMe ? ' (you)' : ''}</span><span class="lb-bar"><i style="width:${Math.max(4, Math.round((r.minutes / lb.rows[0].minutes) * 100))}%"></i></span><b class="num">${fmtMin(r.minutes)}</b></li>`).join('')}</ol>`
+      : '<p class="empty">Nobody on the board yet this week. Opt in and finish a focus block to be first.</p>'}
+    ${myRow ? '' : `<p class="muted" style="font-size:var(--step--1);margin-bottom:0">Your week: <b>${fmtMin(lb.me.minutes)}</b> in ${lb.me.blocks} ${lb.me.blocks === 1 ? 'block' : 'blocks'}${lb.optedIn ? '' : ' (only you can see this)'}.</p>`}`;
+  $('#lb-opt').onchange = async (e) => {
+    try { state.me.prefs = await api('PUT', '/prefs', { leaderboard: e.target.checked }); renderLeaderboard(); } catch (err) { fail(err); }
+  };
+}
+
+// Daily focus goal.
+const GOALS = [30, 60, 90, 120, 180, 240, 300, 360];
+function goalHtml(focusMin) {
+  const goal = state.me.prefs?.dailyGoalMin || 120;
+  const pct = Math.min(1, focusMin / goal);
+  return `<div class="goal ${pct >= 1 ? 'met' : ''}">
+    <div class="goal-head"><b>${pct >= 1 ? 'Daily goal reached' : 'Daily focus goal'}</b>
+      <label class="goal-pick"><span class="sr" style="position:absolute;left:-999px">Daily goal</span>
+        <select id="goal-select">${GOALS.map((g) => `<option value="${g}" ${g === goal ? 'selected' : ''}>${fmtMin(g)}</option>`).join('')}</select></label></div>
+    <div class="level-bar goal-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${goal}" aria-valuenow="${Math.round(focusMin)}" aria-label="Focus goal progress"><i style="width:${Math.round(pct * 100)}%"></i></div>
+    <small>${fmtMin(focusMin)} of ${fmtMin(goal)}${pct >= 1 ? '. Anything more is a bonus; rest counts too.' : `, ${fmtMin(goal - focusMin)} to go`}</small></div>`;
+}
+
+// Today's tasks: carried over until done; a focus block can be linked to one.
+function tasksHtml(tasks) {
+  const open = tasks.filter((t) => !t.done), done = tasks.filter((t) => t.done);
+  const pips = (t) => `<span class="pips" aria-label="${t.blocksDone} of ${t.estimate} focus blocks">${Array.from({ length: Math.max(t.estimate, t.blocksDone) }, (_, i) => `<i class="${i < t.blocksDone ? 'on' : ''}"></i>`).join('')}</span>`;
+  const row = (t) => `<li class="task ${t.done ? 'done' : ''} ${timer.s.taskId === t.id ? 'current' : ''}" data-task="${t.id}" data-title="${esc(t.title)}">
+      <input type="checkbox" ${t.done ? 'checked' : ''} aria-label="Done: ${esc(t.title)}" data-task-done />
+      <span class="task-title">${esc(t.title)}${t.day < localDay() && !t.done ? ' <small class="muted">from earlier</small>' : ''}</span>${pips(t)}
+      ${t.done ? '' : `<button type="button" class="btn task-go" data-task-focus title="Focus on this">Focus</button>`}
+      <button type="button" class="link task-del" data-task-del aria-label="Delete task">✕</button></li>`;
+  return `<h2 style="margin-top:28px;font-size:var(--step-1)">Today's tasks</h2>
+    <form id="task-form" class="task-form"><input name="title" maxlength="120" placeholder="Add a task, e.g. Revise chapter 3" autocomplete="off" aria-label="New task" />
+      <select name="estimate" aria-label="Focus blocks needed">${[1, 2, 3, 4].map((n) => `<option value="${n}">${n} ${n === 1 ? 'block' : 'blocks'}</option>`).join('')}</select>
+      <button class="btn primary">Add</button></form>
+    ${tasks.length ? `<ul class="tasks">${open.map(row).join('')}${done.map(row).join('')}</ul>` : '<p class="empty" style="margin-top:8px">Plan the day in a few tasks, then press Focus on one to start a block for it.</p>'}`;
+}
+async function taskSubmit(e) {
+  if (e.target.id !== 'task-form') return;
+  e.preventDefault();
+  const f = e.target, title = f.elements.title.value.trim();
+  if (!title) return;
+  try { await api('POST', '/tasks', { title, estimate: +f.elements.estimate.value, day: localDay() }); renderTodaySide(); } catch (err) { fail(err); }
+}
+async function taskChange(e) {
+  if (e.target.id === 'goal-select') {
+    try { state.me.prefs = await api('PUT', '/prefs', { dailyGoalMin: +e.target.value }); toast('Daily goal updated'); renderTodaySide(); } catch (err) { fail(err); }
+    return;
+  }
+  const li = e.target.closest('[data-task]');
+  if (!li || !e.target.matches('[data-task-done]')) return;
+  const id = +li.dataset.task;
+  try {
+    await api('PUT', `/tasks/${id}`, { done: e.target.checked, day: localDay() });
+    if (e.target.checked) { if (timer.s.taskId === id && !timer.s.running) { timer.s.taskId = null; timer.save(); } chime(); toast('Task done. Nice.', 'win'); }
+    renderTodaySide();
+  } catch (err) { fail(err); }
+}
+async function taskClick(e) {
+  const li = e.target.closest('[data-task]');
+  if (!li) return;
+  const id = +li.dataset.task;
+  if (e.target.closest('[data-task-del]')) {
+    try { await api('DELETE', `/tasks/${id}`); if (timer.s.taskId === id) { timer.s.taskId = null; timer.save(); } renderTodaySide(); } catch (err) { fail(err); }
+  }
+  if (e.target.closest('[data-task-focus]')) {
+    if (timer.s.running) return toast('Finish or end the current block first.');
+    timer.s.taskId = id;
+    timer.s.tag = li.dataset.title.slice(0, 40);
+    if (timer.s.mode !== 'focus') timer.setMode('focus');
+    timer.save();
+    const tag = $('#tag'); if (tag) tag.value = timer.s.tag;
+    $$('.task.current').forEach((x) => x.classList.remove('current'));
+    li.classList.add('current');
+    timer.start();
+  }
 }
 
 // ---------------------------------------------------------------- Rooms
@@ -559,8 +747,10 @@ VIEWS.rooms = async (main, roomId) => {
         <h3>${esc(r.name)}</h3><p>${esc(r.description)}</p>
         <div class="faces">${r.members.slice(0, 4).map((m) => `<span class="face" title="${esc(m.name)}">${esc(initials(m.name))}</span>`).join('')}
           <span>${r.members.length ? `${r.members.length} here${r.members.some((m) => m.focusing) ? `, ${r.members.filter((m) => m.focusing).length} focusing` : ''}` : 'Nobody here yet'}</span></div>
-      </button>`).join('')}</div>`;
+      </button>`).join('')}</div>
+    <section class="panel leaderboard" id="leaderboard"></section>`;
   main.addEventListener('click', (e) => { const t = e.target.closest('[data-room]'); if (t) location.hash = `#/rooms/${t.dataset.room}`; });
+  renderLeaderboard();
   const refresh = () => currentView() === 'rooms' && !location.hash.split('/')[2] && VIEWS.rooms(main);
   state.socket?.on('rooms:counts', refresh);
   state.cleanup.push(() => state.socket?.off('rooms:counts', refresh));
@@ -579,7 +769,11 @@ async function renderRoom(main, roomId) {
       <div class="call-bar" id="call-bar"></div>
     </section>
     <div class="room">
-      <aside class="panel"><h2 style="font-size:var(--step-1)">Here now</h2><ul class="people" id="people"></ul></aside>
+      <aside class="stack room-side">
+        <section class="panel"><h2 style="font-size:var(--step-1)">Group timer</h2><div id="group-timer"></div></section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Here now</h2><ul class="people" id="people"></ul></section>
+        <section class="panel">${ambient.controls()}</section>
+      </aside>
       <section class="panel chat">
         <div class="chat-log" id="chat-log" aria-live="polite"></div>
         <div class="replying" id="replying" hidden><span></span><button type="button" class="link" id="reply-cancel" aria-label="Cancel reply">Cancel</button></div>
@@ -636,6 +830,51 @@ async function renderRoom(main, roomId) {
   if (join.error) return toast(join.error, 'err');
   rooms.current = roomId;
   paintPeople(join.members);
+
+  // Shared group timer: one block everyone in the room can see and focus along with.
+  let gt = join.timer || null, gMode = 'focus', gMin = 25;
+  const paintGroup = () => {
+    const el = $('#group-timer');
+    if (!el) return;
+    if (gt && gt.endsAt <= Date.now()) gt = null;
+    if (gt) {
+      const rem = gt.endsAt - Date.now();
+      const mine = gt.by === state.me.user.id;
+      const along = timer.s.running && Math.abs(timer.s.endsAt - gt.endsAt) < 90000;
+      el.innerHTML = `<div class="gt-run ${gt.mode}"><b class="num gt-digits">${pad(Math.floor(rem / 60000))}:${pad(Math.floor((rem % 60000) / 1000))}</b>
+        <span>${gt.mode === 'focus' ? 'Group focus' : 'Group break'} · ${gt.minutes} min · started by ${mine ? 'you' : esc(gt.byName)}</span></div>
+        <div class="row-btns">${along ? '<span class="muted">You\'re focusing along. Your own timer is synced.</span>' : `<button class="btn grow" data-g="along">${gt.mode === 'focus' ? 'Focus along' : 'Take the break too'}</button>`}
+        ${mine ? '<button class="btn" data-g="stop">Stop</button>' : ''}</div>`;
+    } else {
+      el.innerHTML = `<p class="muted" style="margin-top:0">Start a block for the whole room. Everyone sees the same countdown and can focus along.</p>
+        <div class="chips">${[['focus', 25], ['focus', 50], ['break', 5], ['break', 10]].map(([m, n]) => `<button type="button" class="chip" data-gpick="${m}:${n}" aria-pressed="${gMode === m && gMin === n}">${m === 'focus' ? 'Focus' : 'Break'} ${n}</button>`).join('')}</div>
+        <button class="btn primary" data-g="start" style="margin-top:10px">Start group ${gMode} (${gMin} min)</button>`;
+    }
+  };
+  const onTimer = (t) => {
+    const was = gt;
+    gt = t;
+    if (t && (!was || was.startedAt !== t.startedAt) && t.by !== state.me.user.id) toast(`${t.byName} started a ${t.minutes}-minute group ${t.mode}.`);
+    paintGroup();
+  };
+  state.socket.on('room:timer', onTimer);
+  paintGroup();
+  $('#group-timer').addEventListener('click', async (e) => {
+    const pick = e.target.closest('[data-gpick]');
+    if (pick) { [gMode, gMin] = [pick.dataset.gpick.split(':')[0], +pick.dataset.gpick.split(':')[1]]; return paintGroup(); }
+    const a = e.target.closest('[data-g]')?.dataset.g;
+    if (a === 'start') { const r = await emitAck('room:timer:start', { mode: gMode, minutes: gMin }); if (r.error) return toast(r.error, 'err'); gt = r.timer; if (!timer.s.running) { timer.setMode(gt.mode, gt.minutes); timer.start(); } paintGroup(); }
+    if (a === 'stop') { const r = await emitAck('room:timer:stop'); if (r.error) toast(r.error, 'err'); }
+    if (a === 'along' && gt) {
+      if (timer.s.running) return toast('Your own timer is already running.');
+      const planned = Math.max(1, Math.floor((gt.endsAt - Date.now()) / 60000));
+      timer.setMode(gt.mode, planned);
+      timer.start();
+      toast(`Focusing along for ${planned} min. Your session is saved as usual.`);
+      paintGroup();
+    }
+  });
+  const gTick = setInterval(() => { const d = $('#group-timer .gt-digits'); if (gt && d && gt.endsAt > Date.now()) { const rem = gt.endsAt - Date.now(); d.textContent = `${pad(Math.floor(rem / 60000))}:${pad(Math.floor((rem % 60000) / 1000))}`; } else if (gt) paintGroup(); }, 1000);
   timer.broadcast();
 
   $('#chat-form').addEventListener('submit', async (e) => {
@@ -680,6 +919,8 @@ async function renderRoom(main, roomId) {
     state.socket?.off('room:presence', onPresence);
     state.socket?.off('room:message', onMessage);
     paintCall = null;
+    clearInterval(gTick);
+    state.socket?.off('room:timer', onTimer);
     if (!location.hash.startsWith(`#/rooms/${roomId}`)) { rtc.leave(); state.socket?.emit('room:leave'); rooms.current = null; }
   });
 }

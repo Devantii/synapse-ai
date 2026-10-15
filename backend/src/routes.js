@@ -163,6 +163,7 @@ get('/me', async (req, res) => {
       hasPassword: hasPassword(u), google: !!u.google_sub, email: u.email || null },
     googleClientId: google.enabled ? google.clientId : null,
     hasSampleData: await sample.has(u.id),
+    prefs: await prefs(u.id),
     consents: await consents(u.id),
     rewards: await game.summary(u.id),
     llmEnabled: coach.llmEnabled,
@@ -194,6 +195,10 @@ get('/consents/log', async (req, res) =>
 // ---------- focus sessions ----------
 post('/sessions', requireConsent('activity_tracking', 'Save focus activity'), async (req, res) => {
   const result = await sessions.record(req.user.id, req.body);
+  // A completed focus block linked to a task counts towards it.
+  const taskId = Number.isInteger(req.body.taskId) ? req.body.taskId : null;
+  if (taskId && req.body.kind === 'focus' && req.body.completed === true)
+    await db.run('UPDATE tasks SET blocks_done = blocks_done + 1 WHERE id = ? AND user_id = ?', [taskId, req.user.id]);
   res.status(201).json({ ...result, rewards: await game.summary(req.user.id) });
 });
 
@@ -579,6 +584,8 @@ get('/export', async (req, res) => {
     communityPosts: await q('SELECT id, mood, body, created_at FROM posts WHERE user_id = ? ORDER BY id'),
     reactionsGiven: await q('SELECT post_id, kind, created_at FROM reactions WHERE user_id = ?'),
     roomMessages: await q('SELECT room_id, body, created_at FROM room_messages WHERE user_id = ? ORDER BY id'),
+    tasks: await q('SELECT title, estimate, blocks_done, done, day, done_day FROM tasks WHERE user_id = ? ORDER BY id'),
+    preferences: await prefs(id),
     communityReplies: await q('SELECT post_id, body, created_at FROM post_replies WHERE user_id = ? ORDER BY id'),
     connectedDevices: await q('SELECT name, kind, created_at, last_used_at, revoked_at FROM device_tokens WHERE user_id = ? ORDER BY id'),
   };
@@ -587,7 +594,7 @@ get('/export', async (req, res) => {
 });
 
 const DELETE_SCOPES = {
-  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state'],
+  activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
   community: ['posts', 'post_replies', 'reactions', 'room_messages'],
@@ -600,6 +607,73 @@ del('/data', async (req, res) => {
     for (const table of tables) await t.run(`DELETE FROM ${table} WHERE user_id = ?`, [req.user.id]);
   });
   res.json({ ok: true, deleted: scope });
+});
+
+// ---------- tasks ----------
+const dayParam = (v) => (DAY_RE.test(String(v || '')) ? String(v) : new Date().toISOString().slice(0, 10));
+const TASK_COLS = 'id, title, estimate, blocks_done AS "blocksDone", done, day, done_day AS "doneDay", position';
+// Open tasks (from any day) plus the ones finished today.
+get('/tasks', async (req, res) => {
+  const day = dayParam(req.query.day);
+  res.json(await db.all(`SELECT ${TASK_COLS} FROM tasks WHERE user_id = ? AND (done = 0 OR done_day = ?) ORDER BY done, position, id`, [req.user.id, day]));
+});
+post('/tasks', async (req, res) => {
+  const title = text(req.body.title, 'Task', 1, 120);
+  const estimate = Math.min(8, Math.max(1, parseInt(req.body.estimate, 10) || 1));
+  const open = await db.get('SELECT COUNT(*) AS n, MAX(position) AS p FROM tasks WHERE user_id = ? AND done = 0', [req.user.id]);
+  if (Number(open.n) >= 50) throw new HttpError(400, 'That is a lot of open tasks. Finish or delete a few first.');
+  const id = await db.insert('INSERT INTO tasks (user_id, title, estimate, day, position) VALUES (?, ?, ?, ?, ?)',
+    [req.user.id, title, estimate, dayParam(req.body.day), (Number(open.p) || 0) + 1]);
+  res.status(201).json(await db.get(`SELECT ${TASK_COLS} FROM tasks WHERE id = ?`, [id]));
+});
+put('/tasks/:id', async (req, res) => {
+  const t = await db.get('SELECT * FROM tasks WHERE id = ? AND user_id = ?', [intId(req.params.id), req.user.id]);
+  if (!t) throw new HttpError(404, 'Task not found.');
+  const title = req.body.title !== undefined ? text(req.body.title, 'Task', 1, 120) : t.title;
+  const estimate = req.body.estimate !== undefined ? Math.min(8, Math.max(1, parseInt(req.body.estimate, 10) || 1)) : t.estimate;
+  const done = req.body.done !== undefined ? (req.body.done ? 1 : 0) : t.done;
+  const doneDay = done ? (t.done ? t.done_day : dayParam(req.body.day)) : null;
+  await db.run('UPDATE tasks SET title = ?, estimate = ?, done = ?, done_day = ? WHERE id = ?', [title, estimate, done, doneDay, t.id]);
+  res.json(await db.get(`SELECT ${TASK_COLS} FROM tasks WHERE id = ?`, [t.id]));
+});
+del('/tasks/:id', async (req, res) => {
+  const r = await db.run('DELETE FROM tasks WHERE id = ? AND user_id = ?', [intId(req.params.id), req.user.id]);
+  if (!r.changes) throw new HttpError(404, 'Task not found.');
+  res.json({ ok: true });
+});
+
+// ---------- preferences: daily goal, leaderboard ----------
+async function prefs(userId) {
+  const p = await db.get('SELECT daily_goal_min, leaderboard FROM user_prefs WHERE user_id = ?', [userId]);
+  return { dailyGoalMin: p ? p.daily_goal_min : 120, leaderboard: !!p?.leaderboard };
+}
+get('/prefs', async (req, res) => res.json(await prefs(req.user.id)));
+put('/prefs', async (req, res) => {
+  const cur = await prefs(req.user.id);
+  const goal = req.body.dailyGoalMin !== undefined ? Math.min(720, Math.max(15, parseInt(req.body.dailyGoalMin, 10) || 120)) : cur.dailyGoalMin;
+  const lb = req.body.leaderboard !== undefined ? !!req.body.leaderboard : cur.leaderboard;
+  await db.run(`INSERT INTO user_prefs (user_id, daily_goal_min, leaderboard) VALUES (?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET daily_goal_min = excluded.daily_goal_min, leaderboard = excluded.leaderboard`, [req.user.id, goal, lb ? 1 : 0]);
+  res.json(await prefs(req.user.id));
+});
+
+// Weekly focus leaderboard: only people who opted in are listed; you always see your own total.
+get('/leaderboard', async (req, res) => {
+  const from = dayParam(req.query.from);
+  const to = (() => { const d = new Date(`${from}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); })();
+  const rows = await db.all(
+    `SELECT u.id, u.display_name AS name, SUM(s.actual_min) AS minutes, COUNT(*) AS blocks
+       FROM focus_sessions s JOIN users u ON u.id = s.user_id JOIN user_prefs p ON p.user_id = s.user_id
+      WHERE p.leaderboard = 1 AND s.kind = 'focus' AND s.completed = 1 AND s.sample = 0 AND s.day BETWEEN ? AND ?
+      GROUP BY u.id, u.display_name ORDER BY minutes DESC, u.id LIMIT 20`, [from, to]);
+  const mine = await db.get(
+    `SELECT COALESCE(SUM(actual_min), 0) AS minutes, COUNT(*) AS blocks FROM focus_sessions
+      WHERE user_id = ? AND kind = 'focus' AND completed = 1 AND sample = 0 AND day BETWEEN ? AND ?`, [req.user.id, from, to]);
+  res.json({
+    from, to, optedIn: (await prefs(req.user.id)).leaderboard,
+    me: { minutes: Number(mine.minutes) || 0, blocks: Number(mine.blocks) || 0 },
+    rows: rows.map((r, i) => ({ rank: i + 1, name: r.name, minutes: Math.round(Number(r.minutes)), blocks: Number(r.blocks), isMe: r.id === req.user.id })),
+  });
 });
 
 // ---------- sample data ----------

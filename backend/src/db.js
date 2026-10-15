@@ -175,6 +175,28 @@ CREATE TABLE IF NOT EXISTS room_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_room_msgs ON room_messages(room_id, id);
 
+-- Today's tasks (carried over until done). blocks_done counts focus blocks linked to the task.
+CREATE TABLE IF NOT EXISTS tasks (
+  id           ${T.ID},
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title        TEXT NOT NULL,
+  estimate     INTEGER NOT NULL DEFAULT 1,   -- focus blocks planned
+  blocks_done  INTEGER NOT NULL DEFAULT 0,
+  done         INTEGER NOT NULL DEFAULT 0,
+  day          TEXT NOT NULL,                -- local day it was added
+  done_day     TEXT,
+  position     INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL DEFAULT ${T.NOW}
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id, done);
+
+-- Personal preferences.
+CREATE TABLE IF NOT EXISTS user_prefs (
+  user_id        INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  daily_goal_min INTEGER NOT NULL DEFAULT 120,
+  leaderboard    INTEGER NOT NULL DEFAULT 0     -- opt in to the weekly focus leaderboard
+);
+
 -- Replies to community check-ins.
 CREATE TABLE IF NOT EXISTS post_replies (
   id         ${T.ID},

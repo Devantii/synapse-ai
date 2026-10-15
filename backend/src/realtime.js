@@ -5,6 +5,14 @@ const { verify } = require('./auth');
 const MAX_AUDIO_PEERS = 6; // a peer-to-peer call stays usable up to ~6 people; beyond that use LiveKit.
 const members = new Map(); // socketId -> { userId, name, roomId, focusing, focusEndsAt, audio, muted, video } (audio = on the call)
 
+// Shared room timers: one group focus block or break per room, visible to everyone in it.
+const roomTimers = new Map(); // roomId -> { mode, minutes, startedAt, endsAt, by, byName }
+function roomTimer(roomId) {
+  const t = roomTimers.get(roomId);
+  if (t && t.endsAt <= Date.now()) { roomTimers.delete(roomId); return null; }
+  return t || null;
+}
+
 function roomMembers(roomId) {
   return [...members.entries()]
     .filter(([, m]) => m.roomId === roomId)
@@ -68,7 +76,33 @@ function attach(io) {
       socket.join(roomId);
       broadcastPresence(roomId);
       io.emit('rooms:counts');
-      ack?.({ ok: true, members: roomMembers(roomId) });
+      ack?.({ ok: true, members: roomMembers(roomId), timer: roomTimer(roomId) });
+    });
+
+    // { minutes, mode }: start a shared block for the room (if none is running).
+    socket.on('room:timer:start', ({ minutes, mode } = {}, ack) => {
+      const m = members.get(socket.id);
+      if (!m?.roomId) return ack?.({ error: 'Join a room first.' });
+      const kind = mode === 'break' ? 'break' : 'focus';
+      const mins = Math.round(Number(minutes));
+      if (!Number.isFinite(mins) || mins < 1 || mins > 120) return ack?.({ error: 'Pick 1-120 minutes.' });
+      if (roomTimer(m.roomId)) return ack?.({ error: 'A group timer is already running in this room.' });
+      const now = Date.now();
+      const t = { mode: kind, minutes: mins, startedAt: now, endsAt: now + mins * 60000, by: m.userId, byName: m.name };
+      roomTimers.set(m.roomId, t);
+      io.to(m.roomId).emit('room:timer', t);
+      ack?.({ ok: true, timer: t });
+    });
+    // Whoever started it can end it early (or anyone, once they've left).
+    socket.on('room:timer:stop', (_, ack) => {
+      const m = members.get(socket.id);
+      const t = m?.roomId && roomTimer(m.roomId);
+      if (!t) return ack?.({ ok: true });
+      const starterHere = roomMembers(m.roomId).some((x) => x.userId === t.by);
+      if (t.by !== m.userId && starterHere) return ack?.({ error: `Only ${t.byName} can stop this group timer.` });
+      roomTimers.delete(m.roomId);
+      io.to(m.roomId).emit('room:timer', null);
+      ack?.({ ok: true });
     });
 
     socket.on('room:leave', (_, ack) => {

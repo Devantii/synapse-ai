@@ -280,6 +280,17 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     const sig = new Promise((r) => sa.on('rtc:signal', r));
     sb.emit('rtc:signal', { to: sa.id, data: { type: 'offer', sdp: 'v=0' } });
     assert((await sig).from === sb.id);
+    // shared group timer
+    const gotTimer = new Promise((r) => sb.on('room:timer', r));
+    const st = await emit(sa, 'room:timer:start', { mode: 'focus', minutes: 25 });
+    assert(st.ok && st.timer.minutes === 25, JSON.stringify(st));
+    assert((await gotTimer).byName, 'others see the group timer');
+    assert((await emit(sb, 'room:timer:start', { minutes: 10 })).error, 'only one group timer per room');
+    assert((await emit(sb, 'room:timer:stop')).error, 'only the starter can stop it while present');
+    const rejoin = await emit(sb, 'room:join', { roomId: 'deep-work' });
+    assert(rejoin.timer && rejoin.timer.endsAt === st.timer.endsAt, 'joiners receive the running timer');
+    assert((await emit(sa, 'room:timer:stop')).ok);
+    assert((await emit(sa, 'room:timer:start', { minutes: 500 })).error, 'minutes are bounded');
     const unauth = await new Promise((r) => { const s = ioc(base, { auth: { token: 'bad' }, transports: ['websocket'] }); s.on('connect_error', () => { s.close(); r(true); }); s.on('connect', () => { s.close(); r(false); }); });
     assert(unauth, 'unauthenticated socket connected');
     sa.close(); sb.close();
@@ -467,10 +478,51 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('GET', '/api/me', null, S)).data.hasSampleData === false);
   });
 
+  console.log('Tasks, goal, leaderboard');
+  await test('tasks: add, link a focus block, complete, carry over', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const yday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const t1 = await api('POST', '/api/tasks', { title: 'Revise chapter 3', estimate: 2, day: yday }, A);
+    const t2 = await api('POST', '/api/tasks', { title: 'Email supervisor', day: today }, A);
+    assert(t1.status === 201 && t1.data.estimate === 2 && t2.data.blocksDone === 0);
+    const r = await api('POST', '/api/sessions', { kind: 'focus', plannedMin: 25, actualMin: 25, completed: true, day: today,
+      startedAt: `${today}T14:00`, endedAt: `${today}T14:25`, taskId: t1.data.id }, A);
+    assert(r.status === 201, JSON.stringify(r.data));
+    let list = await api('GET', `/api/tasks?day=${today}`, null, A);
+    assert(list.data.find((t) => t.id === t1.data.id).blocksDone === 1, 'linked block counted');
+    assert(list.data.some((t) => t.day === yday && !t.done), 'yesterday\'s open task carries over');
+    await api('PUT', `/api/tasks/${t2.data.id}`, { done: true, day: today }, A);
+    list = await api('GET', `/api/tasks?day=${today}`, null, A);
+    assert(list.data.find((t) => t.id === t2.data.id).done === 1);
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    list = await api('GET', `/api/tasks?day=${tomorrow}`, null, A);
+    assert(!list.data.some((t) => t.id === t2.data.id), 'done tasks drop off the next day');
+    assert((await api('PUT', `/api/tasks/${t1.data.id}`, { done: true }, B)).status === 404, 'not your task');
+    assert((await api('DELETE', `/api/tasks/${t1.data.id}`, null, A)).status === 200);
+    assert((await api('POST', '/api/tasks', { title: '' }, A)).status === 400);
+  });
+  await test('daily goal preference', async () => {
+    assert((await api('GET', '/api/me', null, A)).data.prefs.dailyGoalMin === 120);
+    const r = await api('PUT', '/api/prefs', { dailyGoalMin: 180 }, A);
+    assert(r.data.dailyGoalMin === 180 && r.data.leaderboard === false);
+    assert((await api('PUT', '/api/prefs', { dailyGoalMin: 5 }, A)).data.dailyGoalMin === 15, 'bounded');
+  });
+  await test('leaderboard is opt-in', async () => {
+    const d = new Date(); const from = new Date(d.getTime() - ((d.getDay() + 6) % 7) * 86400000).toISOString().slice(0, 10);
+    let lb = await api('GET', `/api/leaderboard?from=${from}`, null, B);
+    assert(!lb.data.rows.some((r) => r.name === 'Alice'), 'not listed before opting in');
+    await api('PUT', '/api/prefs', { leaderboard: true }, A);
+    lb = await api('GET', `/api/leaderboard?from=${from}`, null, B);
+    const alice = lb.data.rows.find((r) => r.name === 'Alice');
+    assert(alice && alice.minutes > 0 && !alice.isMe, JSON.stringify(lb.data));
+    const mine = await api('GET', `/api/leaderboard?from=${from}`, null, A);
+    assert(mine.data.optedIn && mine.data.rows.find((r) => r.isMe));
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);
-    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 4 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 4 && r.data.dailyLimits.length === 1);
+    assert(r.data.account.username === 'alice' && r.data.focusSessions.length === 5 && r.data.appUsage.length === 6 && r.data.connectedDevices.length === 4 && r.data.dailyLimits.length === 1);
     const rb = await api('GET', '/api/export', null, B);
     assert(rb.data.focusSessions.length === 0 && rb.data.communityPosts.length === 0);
   });
@@ -479,7 +531,7 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     const r = await api('GET', '/api/usage', null, A);
     assert(r.data.entries.length === 0);
     const s = await api('GET', '/api/sessions', null, A);
-    assert(s.data.length === 4, 'sessions should remain');
+    assert(s.data.length === 5, 'sessions should remain');
   });
   await test('delete account requires password and cascades', async () => {
     assert((await api('DELETE', '/api/account', { password: 'wrong' }, A)).status === 401);
