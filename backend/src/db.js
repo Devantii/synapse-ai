@@ -130,7 +130,9 @@ CREATE TABLE IF NOT EXISTS posts (
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   mood       TEXT NOT NULL,
   body       TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT ${T.NOW}
+  created_at TEXT NOT NULL DEFAULT ${T.NOW},
+  sensitive  INTEGER NOT NULL DEFAULT 0,       -- blurred until viewers choose to see it
+  cw         TEXT                              -- content warning shown on the blur
 );
 
 CREATE TABLE IF NOT EXISTS reactions (
@@ -290,6 +292,21 @@ CREATE TABLE IF NOT EXISTS password_resets (
   used       INTEGER NOT NULL DEFAULT 0
 );
 
+-- Images attached to community posts. Stored as base64 (re-encoded and stripped of metadata in the browser,
+-- max ~1.5 MB). The id is a long random key, so links can't be guessed.
+CREATE TABLE IF NOT EXISTS images (
+  id         TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  post_id    INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+  mime       TEXT NOT NULL,
+  data       TEXT NOT NULL,
+  bytes      INTEGER NOT NULL,
+  width      INTEGER,
+  height     INTEGER,
+  created_at TEXT NOT NULL DEFAULT ${T.NOW}
+);
+CREATE INDEX IF NOT EXISTS idx_images_post ON images(post_id);
+
 -- Replies to community check-ins.
 CREATE TABLE IF NOT EXISTS post_replies (
   id         ${T.ID},
@@ -416,6 +433,10 @@ async function migrate() {
   await addColumn('focus_sessions', 'sample', 'INTEGER NOT NULL DEFAULT 0');
   await addColumn('mood_checkins', 'sample', 'INTEGER NOT NULL DEFAULT 0');
   await addColumn('room_messages', 'reply_to', 'INTEGER');
+  // v2.0: sensitive posts (content warning).
+  await addColumn('posts', 'sensitive', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('posts', 'cw', 'TEXT');
+  await addColumn('user_prefs', 'blur_images', 'INTEGER NOT NULL DEFAULT 0');
   // v1.7: moderation.
   await addColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
   // v1.8: weekly email report.

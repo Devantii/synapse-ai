@@ -350,7 +350,7 @@ function chime() {
 // ---------------------------------------------------------------- Ambient sounds
 // Generated live with the Web Audio API (no audio files): rain, ocean waves, wind and brown noise.
 const ambient = {
-  SOUNDS: { lofi: 'Lo-fi music', rain: 'Rain', waves: 'Waves', wind: 'Wind', brown: 'Brown noise' },
+  SOUNDS: { lofi: 'Lo-fi beats', piano: 'Calm piano', space: 'Space ambient', rain: 'Rain', waves: 'Waves', wind: 'Wind', brown: 'Brown noise' },
   ctx: null, master: null, nodes: [], kind: null,
   vol: store.get('synapse.ambient')?.vol ?? 0.5,
   buffer(brown) {
@@ -395,6 +395,8 @@ const ambient = {
       this.lfo(0.09, 350, lp.frequency);
     }
     if (kind === 'lofi') this.lofi();
+    if (kind === 'piano') this.piano();
+    if (kind === 'space') this.space();
     if (kind === 'wind') {
       const n = this.source(false), bp = ctx.createBiquadFilter(), g = ctx.createGain();
       bp.type = 'bandpass'; bp.frequency.value = 600; bp.Q.value = 1.2; g.gain.value = 0.5;
@@ -406,52 +408,125 @@ const ambient = {
     this.kind = kind;
     this.save(); this.paint();
   },
-  // Endless generative lo-fi: jazzy 7th chords, a soft melody, a lazy beat and vinyl crackle at 72 bpm.
+  // ---- Generative music (no audio files). Shared pieces: reverb, an electric-piano voice, drums.
+  reverb(seconds = 2.8, decay = 2.6) {
+    const ctx = this.ctx, len = Math.floor(ctx.sampleRate * seconds), ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    const conv = ctx.createConvolver();
+    conv.buffer = ir;
+    return conv;
+  },
+  musicBus(wet = 0.3, makeup = 1) {
+    const ctx = this.ctx, dry = ctx.createGain(), rev = this.reverb(), wetG = ctx.createGain(), comp = ctx.createDynamicsCompressor(), out = ctx.createGain();
+    out.gain.value = makeup;
+    comp.threshold.value = -18; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.25;
+    wetG.gain.value = wet;
+    dry.connect(comp); dry.connect(rev).connect(wetG).connect(comp);
+    comp.connect(out).connect(this.master);
+    return dry;
+  },
+  // Warm "electric piano": a sine carrier with a decaying FM modulator, plus slow tape wobble.
+  ep(out, freq, t, dur, vol, wobble) {
+    const ctx = this.ctx, car = ctx.createOscillator(), mod = ctx.createOscillator(), modG = ctx.createGain(), g = ctx.createGain();
+    car.frequency.value = freq; mod.frequency.value = freq * 2;
+    modG.gain.setValueAtTime(freq * 1.6, t); modG.gain.exponentialRampToValueAtTime(freq * 0.05, t + 0.9);
+    mod.connect(modG).connect(car.frequency);
+    if (wobble) wobble.connect(car.detune);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.012); g.gain.exponentialRampToValueAtTime(vol * 0.35, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    car.connect(g).connect(out);
+    car.start(t); mod.start(t); car.stop(t + dur + 0.05); mod.stop(t + dur + 0.05);
+  },
+  tone(out, freq, t, dur, vol, type = 'sine', attack = 0.02) {
+    const ctx = this.ctx, o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(out); o.start(t); o.stop(t + dur + 0.05);
+  },
+  noiseHit(out, t, dur, vol, type, f, q = 0.8) {
+    const ctx = this.ctx, n = ctx.createBufferSource(), flt = ctx.createBiquadFilter(), g = ctx.createGain();
+    n.buffer = this.noiseBuf ??= this.buffer(false); flt.type = type; flt.frequency.value = f; flt.Q.value = q;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    n.connect(flt).connect(g).connect(out); n.start(t, Math.random() * 3); n.stop(t + dur + 0.02);
+  },
+  loop(stepSec, fn) {
+    let step = 0, next = this.ctx.currentTime + 0.15;
+    const run = () => { while (next < this.ctx.currentTime + 0.6) { fn(step, next); next += stepSec; step++; } };
+    run();
+    this.lofiTimer = setInterval(run, 100);
+  },
+  // Lo-fi beats: jazzy progressions on electric piano, walking bass, swung drums with sidechain, vinyl crackle.
   lofi() {
-    const ctx = this.ctx, out = ctx.createGain(), lp = ctx.createBiquadFilter();
-    out.gain.value = 0.9; lp.type = 'lowpass'; lp.frequency.value = 2200;
-    lp.connect(out).connect(this.master);
+    const ctx = this.ctx, bus = this.musicBus(0.22, 3.2), keys = ctx.createGain(), lp = ctx.createBiquadFilter(), drums = ctx.createGain();
+    lp.type = 'lowpass'; lp.frequency.value = 2400; keys.gain.value = 0.9;
+    keys.connect(lp).connect(bus); drums.gain.value = 0.9; drums.connect(bus);
+    const wob = ctx.createOscillator(), wobG = ctx.createGain(); wob.frequency.value = 0.35; wobG.gain.value = 7; wob.connect(wobG); wob.start(); this.nodes.push(wob);
     const crackle = this.source(false), hp = ctx.createBiquadFilter(), cg = ctx.createGain();
-    hp.type = 'highpass'; hp.frequency.value = 4000; cg.gain.value = 0.012;
-    crackle.connect(hp).connect(cg).connect(out);
-    const noise = this.buffer(false);
+    hp.type = 'highpass'; hp.frequency.value = 3500; cg.gain.value = 0.008; crackle.connect(hp).connect(cg).connect(bus);
     const hz = (m) => 440 * 2 ** ((m - 69) / 12);
-    const CHORDS = [[48, 55, 59, 64], [45, 52, 55, 60], [50, 57, 60, 65], [43, 50, 53, 59]]; // Cmaj7 Am7 Dm7 G7
-    const SCALE = [72, 74, 76, 79, 81, 84];
-    const eighth = 60 / 72 / 2;
-    const tone = (freq, t, dur, vol, type = 'sine') => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = type; o.frequency.value = freq;
-      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.04); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(g).connect(lp); o.start(t); o.stop(t + dur + 0.05);
-    };
-    const hit = (t, dur, vol, type, f) => {
-      const n = ctx.createBufferSource(), flt = ctx.createBiquadFilter(), g = ctx.createGain();
-      n.buffer = noise; flt.type = type; flt.frequency.value = f;
-      g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      n.connect(flt).connect(g).connect(out); n.start(t, Math.random() * 2); n.stop(t + dur + 0.02);
-    };
-    const kick = (t) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.14);
-      g.gain.setValueAtTime(0.55, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
-      o.connect(g).connect(out); o.start(t); o.stop(t + 0.32);
-    };
-    let step = 0, next = ctx.currentTime + 0.15;
-    const schedule = () => {
-      while (next < ctx.currentTime + 0.5) {
-        const t = next + (step % 2 ? 0.035 : 0); // a little swing
-        const chord = CHORDS[Math.floor(step / 8) % CHORDS.length];
-        if (step % 8 === 0) chord.forEach((m, i) => { tone(hz(m), t, eighth * 8, 0.05, i % 2 ? 'triangle' : 'sine'); });
-        if (step % 8 === 0 || step % 8 === 5) kick(t);
-        if (step % 8 === 4) hit(t, 0.16, 0.12, 'bandpass', 1800);
-        if (step % 2 === 1) hit(t, 0.04, 0.035, 'highpass', 7000);
-        if (Math.random() < 0.3 && step % 8 !== 0) tone(hz(SCALE[Math.floor(Math.random() * SCALE.length)]), t, eighth * 2.5, 0.035, 'triangle');
-        next += eighth; step++;
+    const PROGS = [
+      [[50, 53, 57, 60, 64], [43, 53, 55, 59, 62], [48, 52, 55, 59, 64], [45, 52, 55, 60, 64]],   // Dm9 G13 Cmaj9 Am9
+      [[53, 57, 60, 64, 67], [52, 55, 59, 62, 67], [50, 53, 57, 60, 64], [55, 59, 62, 65, 69]],   // Fmaj9 Em7 Dm9 G9
+      [[45, 52, 55, 59, 64], [50, 57, 60, 64, 65], [43, 50, 53, 57, 59], [48, 55, 59, 62, 64]],   // Am9 Dm11 G7 Cmaj7
+    ];
+    const SCALE = [72, 74, 76, 79, 81, 84, 86];
+    let prog = PROGS[Math.floor(Math.random() * PROGS.length)];
+    const eighth = 60 / 74 / 2;
+    this.loop(eighth, (step, t0) => {
+      const t = t0 + (step % 2 ? eighth * 0.18 : 0); // swing
+      const bar = Math.floor(step / 8), pos = step % 8;
+      if (pos === 0 && bar % 8 === 0 && bar) prog = PROGS[Math.floor(Math.random() * PROGS.length)];
+      const chord = prog[bar % prog.length];
+      if (pos === 0) chord.forEach((m, i) => this.ep(keys, hz(m), t + i * 0.012, eighth * 7.5, 0.045, wobG));
+      if (pos === 5 && Math.random() < 0.5) chord.slice(2).forEach((m) => this.ep(keys, hz(m), t, eighth * 2, 0.025, wobG));
+      if (pos === 0 || pos === 4) this.tone(bus, hz(chord[0] - 12), t, eighth * 3.5, 0.18, 'sine', 0.01);         // bass
+      if (pos === 6 && Math.random() < 0.6) this.tone(bus, hz(chord[0] - 5), t, eighth * 1.5, 0.12, 'sine', 0.01); // fifth
+      if (pos === 0 || pos === 5) { // kick + sidechain duck on the keys
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.16);
+        g.gain.setValueAtTime(0.7, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+        o.connect(g).connect(drums); o.start(t); o.stop(t + 0.37);
+        keys.gain.setValueAtTime(0.45, t); keys.gain.linearRampToValueAtTime(0.9, t + 0.28);
       }
-    };
-    schedule();
-    this.lofiTimer = setInterval(schedule, 120);
+      if (pos === 2 || pos === 6) { this.noiseHit(drums, t, 0.18, 0.16, 'bandpass', 1900, 0.7); this.tone(drums, 190, t, 0.1, 0.06, 'triangle', 0.003); }
+      if (pos % 2 === 1 || Math.random() < 0.3) this.noiseHit(drums, t, 0.035, pos % 2 ? 0.05 : 0.03, 'highpass', 8000);
+      if (pos !== 0 && Math.random() < 0.22) this.ep(keys, hz(SCALE[Math.floor(Math.random() * SCALE.length)]), t, eighth * 3, 0.03, wobG);
+      if (Math.random() < 0.05) this.noiseHit(bus, t, 0.01, 0.05, 'highpass', 2000); // vinyl pop
+    });
+  },
+  // Calm piano: sparse notes over slow chords, lots of space and reverb.
+  piano() {
+    const bus = this.musicBus(0.45, 6), hz = (m) => 440 * 2 ** ((m - 69) / 12);
+    const CH = [[45, 57, 60, 64], [41, 53, 57, 60], [48, 55, 60, 64], [43, 55, 59, 62]]; // Am F C G
+    const MEL = [69, 71, 72, 74, 76, 79, 81];
+    const beat = 60 / 62;
+    this.loop(beat, (step, t) => {
+      const bar = Math.floor(step / 4), pos = step % 4, chord = CH[bar % CH.length];
+      if (pos === 0) chord.forEach((m, i) => this.ep(bus, hz(m), t + i * 0.06, beat * 4, i ? 0.03 : 0.05));
+      if (Math.random() < (pos === 2 ? 0.7 : 0.35)) this.ep(bus, hz(MEL[Math.floor(Math.random() * MEL.length)]), t + (Math.random() < 0.3 ? beat / 2 : 0), beat * 2.5, 0.05);
+    });
+  },
+  // Space ambient: slow evolving pads that drift between chords.
+  space() {
+    const ctx = this.ctx, bus = this.musicBus(0.6, 2.8), lp = ctx.createBiquadFilter(), hz = (m) => 440 * 2 ** ((m - 69) / 12);
+    lp.type = 'lowpass'; lp.frequency.value = 900; lp.Q.value = 2; lp.connect(bus);
+    this.lfo(0.03, 500, lp.frequency);
+    const CH = [[38, 50, 57, 64, 69], [41, 53, 60, 64, 72], [36, 48, 55, 62, 67], [43, 50, 59, 62, 71]];
+    const len = 9;
+    this.loop(len, (step, t) => {
+      CH[step % CH.length].forEach((m, i) => {
+        [-6, 6].forEach((det) => {
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.type = i ? 'sawtooth' : 'sine'; o.frequency.value = hz(m); o.detune.value = det;
+          g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(i ? 0.018 : 0.05, t + 3.5); g.gain.linearRampToValueAtTime(0.0001, t + len + 3);
+          o.connect(g).connect(lp); o.start(t); o.stop(t + len + 3.2);
+        });
+      });
+      if (Math.random() < 0.6) this.ep(bus, hz(CH[step % CH.length][4] + 12), t + 2 + Math.random() * 4, 4, 0.02);
+    });
   },
   stop(quick) {
     clearInterval(this.lofiTimer);
@@ -954,7 +1029,13 @@ async function renderRoom(main, roomId) {
   const room = list.find((r) => r.id === roomId);
   if (!room) { main.innerHTML = `<p class="empty">That room doesn't exist. <a href="#/rooms">See all rooms</a></p>`; return; }
   main.innerHTML = `
-    <div class="page-head"><div><a href="#/rooms" class="muted">All rooms</a><h1>${esc(room.name)}</h1><p>${esc(room.description)}</p></div></div>
+    <header class="room-head"><div><h1>${esc(room.name)}</h1><p>${esc(room.description)}</p></div>
+      <a class="btn danger" href="#/rooms">Leave room</a></header>
+    <div class="room-tabs" role="tablist" aria-label="Room sections">
+      <button type="button" class="chip" data-rtab="video" aria-pressed="true">Video</button>
+      <button type="button" class="chip" data-rtab="chat" aria-pressed="false">Chat <span class="num" id="rtab-chat-n"></span></button>
+      <button type="button" class="chip" data-rtab="people" aria-pressed="false">People</button>
+    </div>
     <section class="panel room-bar">
       <div class="room-clock"><svg aria-hidden="true"><use href="#i-timer"/></svg><div><b class="num" id="room-elapsed">0:00</b><span>in this room</span></div>
         <div><b class="num" id="room-today">–</b><span>in rooms today</span></div></div>
@@ -978,14 +1059,34 @@ async function renderRoom(main, roomId) {
           <input id="chat-input" maxlength="500" autocomplete="off" placeholder="Say what you're starting on" /><button class="btn primary">Send</button></form>
       </section>
     </div>`;
+  // Full-screen room: the rest of the app steps aside while you're in a room.
+  document.body.classList.add('in-room');
+  const roomEl = main;
+  roomEl.dataset.rtab = 'video';
+  $$('[data-rtab]', roomEl).forEach((b) => b.addEventListener('click', () => {
+    roomEl.dataset.rtab = b.dataset.rtab;
+    $$('[data-rtab]', roomEl).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    if (b.dataset.rtab === 'chat') { $('#rtab-chat-n').textContent = ''; const lg = $('#chat-log'); lg.scrollTop = lg.scrollHeight; }
+  }));
   const log = $('#chat-log');
+  let unread = 0, chatReady = false;
+  log.insertAdjacentHTML('afterend', '<button type="button" class="chat-new" id="chat-new" hidden></button>');
+  $('#chat-new').addEventListener('click', () => { log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' }); });
+  log.addEventListener('scroll', () => { if (log.scrollHeight - log.scrollTop - log.clientHeight < 40) { unread = 0; $('#chat-new').hidden = true; } });
   const addMsg = (m) => {
     if (!m.isMine && state.me.blockedUserIds?.includes(m.userId)) return; // blocked: never shown
     const mine = m.isMine || m.userId === state.me.user.id;
     const quote = m.reply ? `<button class="quote" data-jump="${m.reply.id}"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</button>` : '';
+    const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 120;
     log.insertAdjacentHTML('beforeend', `<div class="msg ${mine ? 'mine' : ''}" data-mid="${m.id}" data-author="${esc(mine ? 'yourself' : m.author)}"><div class="who">${mine ? 'You' : esc(m.author)}${mine ? '' : levelChip(m.level)} · ${ago(m.created_at)}
       <button class="link msg-reply" data-reply="${m.id}">Reply</button>${mine ? '' : modMenu('message', m.id)}</div>${quote}<div class="bubble">${esc(m.body)}</div></div>`);
-    log.scrollTop = log.scrollHeight;
+    if (chatReady && !mine && roomEl.dataset.rtab !== 'chat') { const n = $('#rtab-chat-n'); n.textContent = String((+n.textContent || 0) + 1); }
+    if (mine || nearBottom || !chatReady) log.scrollTop = log.scrollHeight;
+    else {
+      unread++;
+      const pill = $('#chat-new');
+      if (pill) { pill.hidden = false; pill.textContent = `${unread} new ${unread === 1 ? 'message' : 'messages'} ↓`; }
+    }
   };
   let replyTo = null;
   const setReply = (id) => {
@@ -1012,6 +1113,7 @@ async function renderRoom(main, roomId) {
         ${m.reply ? `<div class="quote"><b>${esc(m.reply.author)}</b> ${esc(m.reply.body)}</div>` : ''}<div class="bubble">${esc(m.body)}</div></div>`);
   }
   (await api('GET', `/rooms/${roomId}/messages`)).forEach(addMsg);
+  chatReady = true;
   if (!log.children.length) log.innerHTML = `<p class="empty" id="chat-empty">No messages yet. Say what you're working on so others know you're here.</p>`;
 
   let lastMembers = [];
@@ -1134,6 +1236,7 @@ async function renderRoom(main, roomId) {
   const tick = setInterval(() => paintPeople(lastMembers), 30000); // refresh "min left" and time in room
 
   state.cleanup.push(() => {
+    document.body.classList.remove('in-room');
     clearInterval(tick);
     state.socket?.off('room:presence', onPresence);
     state.socket?.off('room:message', onMessage);
@@ -1579,6 +1682,41 @@ VIEWS.admin = async (main, arg) => {
   };
 };
 
+/** Resize to max 1600 px and re-encode as JPEG: smaller uploads and no EXIF/location data. */
+async function shrinkImage(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+  const c = Object.assign(document.createElement('canvas'), { width: w, height: h });
+  c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  bmp.close?.();
+  let q = 0.85, data = c.toDataURL('image/jpeg', q);
+  while (data.length > 1_900_000 && q > 0.4) { q -= 0.15; data = c.toDataURL('image/jpeg', q); }
+  return { data, width: w, height: h };
+}
+
+function lightbox(url) {
+  let d = $('#lightbox');
+  if (!d) { d = Object.assign(document.createElement('dialog'), { id: 'lightbox', className: 'lightbox' }); document.body.append(d); d.addEventListener('click', () => d.close()); }
+  d.innerHTML = `<img src="${esc(url)}" alt="Shared photo, full size" /><button class="btn" aria-label="Close">Close</button>`;
+  d.showModal();
+}
+
+/** Shown before posting something that sounds like a crisis. Resolves 'post' or 'cancel'. */
+function supportDialog(help) {
+  return new Promise((resolve) => {
+    let d = $('#support-dialog');
+    if (!d) { d = Object.assign(document.createElement('dialog'), { id: 'support-dialog', className: 'sheet support' }); document.body.append(d); }
+    d.innerHTML = `<form method="dialog"><h2>We're glad you're sharing this</h2>
+      <p>It sounds like things are really heavy right now. You don't have to carry it alone. Talking to someone today can help:</p>
+      <ul class="helplines">${help.map((h) => `<li><b>${esc(h.name)}</b><a href="tel:${esc(h.contact.split(' ')[0])}">${esc(h.contact)}</a></li>`).join('')}</ul>
+      <p class="muted" style="font-size:var(--step--1)">If you post, it will show blurred with a gentle warning, and the site's admins may check in with you.</p>
+      <div class="sheet-actions"><button class="btn" value="cancel">Don't post now</button><button class="btn primary" value="post">Post it</button></div></form>`;
+    d.onclose = () => resolve(d.returnValue === 'post' ? 'post' : 'cancel');
+    d.showModal();
+  });
+}
+
 // ---------------------------------------------------------------- Community
 VIEWS.community = async (main) => {
   const MOOD_WORDS = { calm: 'Calm', focused: 'Focused', proud: 'Proud', tired: 'Tired', stressed: 'Stressed', hopeful: 'Hopeful' };
@@ -1588,15 +1726,25 @@ VIEWS.community = async (main) => {
     <div class="page-head"><div><h1>Community</h1><p>Short check-ins from people working on their screen habits. Be kind; there's no follower count here.</p></div></div>
     <div class="split">
       <section>
+        <div class="feed-tools">
+          <div class="chips" role="tablist" aria-label="Show">${[['latest', 'Latest'], ['top', 'Top this week'], ['buddies', 'Buddies'], ['mine', 'Mine']].map(([k, v]) => `<button type="button" class="chip" data-tab="${k}" aria-pressed="${k === 'latest'}">${v}</button>`).join('')}</div>
+          <div class="feed-filters"><select id="mood-filter" aria-label="Filter by mood"><option value="">All moods</option>${Object.entries(MOOD_WORDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+            <input id="feed-search" type="search" placeholder="Search check-ins" aria-label="Search check-ins" maxlength="60" /></div>
+        </div>
         <button class="btn banner" id="new-banner" hidden>New check-ins. Show them</button>
         <ul class="feed" id="feed"></ul>
-        <button class="btn" id="more" hidden>Load older check-ins</button>
+        <button class="btn" id="more" hidden>Load more</button>
       </section>
       <aside class="panel composer">
         <h2 style="font-size:var(--step-1)">Check in</h2>
         <form id="post-form">
           <div class="chips" role="group" aria-label="How are you feeling?">${Object.entries(MOOD_WORDS).map(([k, v]) => `<button type="button" class="chip" aria-pressed="false" data-mood="${k}">${v}</button>`).join('')}</div>
           <label class="field" style="margin-top:12px">What's going on? <textarea name="body" maxlength="500" placeholder="Phone stayed in the other room for the whole morning block."></textarea></label>
+          <div class="photo-row"><label class="btn quiet photo-btn"><svg aria-hidden="true"><use href="#i-image"/></svg>Add photos<input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp,image/heic,image/*" multiple hidden /></label>
+            <small class="muted">Up to 4. Location and camera details are removed.</small></div>
+          <div class="photo-previews" id="photo-previews"></div>
+          <label class="check"><input type="checkbox" name="sensitive" /> Sensitive: blur until people choose to see it</label>
+          <input name="cw" maxlength="60" placeholder="Content warning, e.g. exam stress (optional)" hidden />
           <button class="btn primary wide">Post check-in</button>
         </form>
         <p class="muted" style="margin-top:12px;font-size:var(--step--1)">Posting as <b>${state.me.consents.community_profile ? esc(state.me.user.displayName) : 'Anonymous member'}</b>. Change this in <a href="#/privacy">Privacy</a>.</p>
@@ -1607,45 +1755,103 @@ VIEWS.community = async (main) => {
   const feed = $('#feed');
   const postHtml = (p) => `
     <li class="post" data-id="${p.id}"><header><b>${esc(p.author)}${p.isMine ? ' (you)' : ''}</b>${levelChip(p.level)}<span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood] || p.mood)}</span><time>${ago(p.created_at)}</time></header>
-      <p>${esc(p.body)}</p>
+      <div class="post-body ${p.sensitive && !p.isMine ? 'blurred' : ''}">${p.sensitive && !p.isMine ? `<button type="button" class="cw" data-reveal>⚠ ${esc(p.cw || 'Sensitive')} · Show</button>` : ''}
+        <p>${esc(p.body)}</p>
+        ${p.images?.length ? `<div class="post-images n${p.images.length} ${state.me.prefs?.blurImages && !p.isMine && !p.sensitive ? 'blur-img' : ''}">${p.images.map((im) => `<button type="button" class="pimg" data-full="${esc(im.url)}" aria-label="Open image"><img src="${esc(im.url)}" alt="Photo shared with the check-in" loading="lazy" ${im.width ? `width="${im.width}" height="${im.height}"` : ''} /></button>`).join('')}</div>` : ''}
+      </div>
       <div class="reacts">${Object.entries(RX).map(([k, label]) => `<button class="react" data-react="${k}" aria-pressed="${p.reactions[k].mine}">${label}${p.reactions[k].count ? ` <span class="num">${p.reactions[k].count}</span>` : ''}</button>`).join('')}
       <button class="react" data-reply-toggle>Reply${p.replies.length ? ` <span class="num">${p.replies.length}</span>` : ''}</button>
       ${p.isMine ? `<button class="link" data-delete style="margin-left:auto;font-size:13px">Delete</button>` : modMenu('post', p.id, true)}</div>
-      <div class="replies" ${p.replies.length ? '' : 'hidden'}>${p.replies.map(replyHtml).join('')}</div>
+      <div class="replies" ${p.replies.length ? '' : 'hidden'}>${p.replies.length > 3 ? `<button type="button" class="link more-replies" data-all-replies>View all ${p.replies.length} replies</button>` : ''}${p.replies.map((r, i) => replyHtml(r).replace('class="reply"', `class="reply${p.replies.length > 3 && i < p.replies.length - 2 ? ' folded' : ''}"`)).join('')}</div>
       <form class="reply-form" hidden><label class="sr" style="position:absolute;left:-999px">Reply</label>
         <input name="body" maxlength="400" autocomplete="off" placeholder="Write a kind reply" required /><button class="btn primary">Reply</button></form></li>`;
   const replyHtml = (r) => `<div class="reply" data-rid="${r.id}"><b>${esc(r.author)}${r.isMine ? ' (you)' : ''}</b>${levelChip(r.level)} <time>${ago(r.created_at)}</time>
       ${r.isMine ? '<button class="link" data-reply-delete>Delete</button>' : modMenu('reply', r.id)}<p>${esc(r.body)}</p></div>`;
+  let tab = 'latest', offset = 0;
   async function load(reset) {
-    const r = await api('GET', `/posts?limit=15${!reset && oldest ? `&before=${oldest}` : ''}`);
-    if (reset) feed.innerHTML = '';
+    const qs = new URLSearchParams({ limit: 15 });
+    if (tab === 'top') { qs.set('sort', 'top'); if (!reset) qs.set('offset', offset); }
+    if (tab === 'mine' || tab === 'buddies') qs.set('scope', tab);
+    if ($('#mood-filter').value) qs.set('mood', $('#mood-filter').value);
+    if ($('#feed-search').value.trim()) qs.set('q', $('#feed-search').value.trim());
+    if (!reset && oldest && tab !== 'top') qs.set('before', oldest);
+    const r = await api('GET', `/posts?${qs}`);
+    if (reset) { feed.innerHTML = ''; offset = 0; }
+    offset += r.posts.length;
+    const filtered = tab !== 'latest' || $('#mood-filter').value || $('#feed-search').value.trim();
     feed.insertAdjacentHTML('beforeend', r.posts.map(postHtml).join(''));
-    if (reset && sampleOn()) feed.insertAdjacentHTML('beforeend', SAMPLE.posts.map((p) => `
+    if (reset && sampleOn() && !filtered) feed.insertAdjacentHTML('beforeend', SAMPLE.posts.map((p) => `
       <li class="post sample"><header><b>${esc(p.author)}</b>${sampleTag}<span class="mood ${esc(p.mood)}">${esc(MOOD_WORDS[p.mood])}</span><time>${ago(sampleAgo(p.ago))}</time></header>
         <p>${esc(p.body)}</p>
         ${p.replies.length ? `<div class="replies">${p.replies.map((x) => `<div class="reply"><b>${esc(x.author)}</b> ${sampleTag}<p>${esc(x.body)}</p></div>`).join('')}</div>` : ''}
         <p class="muted" style="font-size:12px;margin:6px 0 0">Sample post, only visible to you while sample data is on.</p></li>`).join(''));
     if (r.posts.length) oldest = r.posts[r.posts.length - 1].id;
     $('#more').hidden = r.posts.length < 15;
-    if (!feed.children.length) feed.innerHTML = `<li class="empty">No check-ins yet. Share how today's focus went and you'll be the first.</li>`;
+    if (!feed.children.length) feed.innerHTML = filtered
+      ? `<li class="empty">${tab === 'buddies' ? 'No check-ins from your buddies yet (anonymous ones never show here).' : 'Nothing matches. Try another filter.'}</li>`
+      : `<li class="empty">No check-ins yet. Share how today's focus went and you'll be the first.</li>`;
   }
   await load(true);
+  $$('[data-tab]').forEach((b) => b.addEventListener('click', () => {
+    tab = b.dataset.tab; oldest = null;
+    $$('[data-tab]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    load(true);
+  }));
+  $('#mood-filter').addEventListener('change', () => { oldest = null; load(true); });
+  let searchTimer;
+  $('#feed-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { oldest = null; load(true); }, 350); });
+
+  // Photos: resized and re-encoded in the browser (strips location/EXIF), uploaded when you post.
+  let photos = [];
+  const paintPhotos = () => {
+    $('#photo-previews').innerHTML = photos.map((ph, i) => `<div class="pv"><img src="${ph.data}" alt="" /><button type="button" data-rm-photo="${i}" aria-label="Remove photo">✕</button></div>`).join('');
+  };
+  $('#photo-input').addEventListener('change', async (e) => {
+    const files = [...e.target.files].slice(0, 4 - photos.length);
+    e.target.value = '';
+    for (const f of files) {
+      try { photos.push(await shrinkImage(f)); } catch { toast(`Couldn't read ${f.name}. Try a JPEG or PNG.`, 'err'); }
+    }
+    if (photos.length >= 4) toast('Up to 4 photos per check-in.');
+    paintPhotos();
+  });
+  $('#photo-previews').addEventListener('click', (e) => { const b = e.target.closest('[data-rm-photo]'); if (b) { photos.splice(+b.dataset.rmPhoto, 1); paintPhotos(); } });
+  $('#post-form').elements.sensitive.addEventListener('change', (e) => { $('#post-form').elements.cw.hidden = !e.target.checked; });
 
   $$('[data-mood]').forEach((b) => b.addEventListener('click', () => { mood = b.dataset.mood; $$('[data-mood]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); }));
   $('#post-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!mood) return toast('Pick how you are feeling first.', 'err');
+    const f = e.target, btn = $('button.primary', f);
+    btn.disabled = true;
     try {
-      const r = await api('POST', '/posts', { mood, body: e.target.elements.body.value });
-      e.target.reset(); mood = null; $$('[data-mood]').forEach((x) => x.setAttribute('aria-pressed', 'false'));
-      celebrate(r); toast('Check-in posted');
+      const images = [];
+      for (const ph of photos) images.push((await api('POST', '/images', ph)).id);
+      const body = { mood, body: f.elements.body.value, images, sensitive: f.elements.sensitive.checked, cw: f.elements.cw.value.trim() || undefined };
+      let r = await api('POST', '/posts', body);
+      if (r.needsSupport) {
+        const choice = await supportDialog(r.help);
+        if (choice !== 'post') { btn.disabled = false; return; }
+        r = await api('POST', '/posts', { ...body, acknowledgeSupport: true });
+      }
+      f.reset(); f.elements.cw.hidden = true; photos = []; paintPhotos();
+      mood = null; $$('[data-mood]').forEach((x) => x.setAttribute('aria-pressed', 'false'));
+      celebrate(r); toast(r.sensitive ? 'Posted. It shows blurred, with a gentle warning.' : 'Check-in posted');
       oldest = null; await load(true);
-    } catch (err) { fail(err); }
+    } catch (err) { fail(err); } finally { btn.disabled = false; }
   });
   $('#more').addEventListener('click', () => load(false));
   feed.addEventListener('click', async (e) => {
     const li = e.target.closest('.post');
     if (!li) return;
+    if (e.target.closest('[data-reveal]')) { const pb = e.target.closest('.post-body'); pb.classList.remove('blurred'); e.target.closest('[data-reveal]').remove(); return; }
+    if (e.target.closest('[data-all-replies]')) { $$('.reply.folded', li).forEach((r) => r.classList.remove('folded')); e.target.closest('[data-all-replies]').remove(); return; }
+    const im = e.target.closest('[data-full]');
+    if (im) {
+      const wrap = im.closest('.post-images');
+      if (wrap.classList.contains('blur-img')) { wrap.classList.remove('blur-img'); return; }
+      return lightbox(im.dataset.full);
+    }
     const btn = e.target.closest('[data-react]');
     try {
       if (btn) {
@@ -2468,6 +2674,9 @@ VIEWS.privacy = async (main) => {
               ${state.me.user.google ? (state.me.user.hasPassword ? '<button class="btn" id="google-unlink">Unlink</button>' : '') : state.me.googleClientId ? '<div id="google-link-btn"></div>' : ''}</div>
           </div></section>
         <section class="panel" id="email-panel"><h2 style="font-size:var(--step-1)">Weekly email report</h2><p class="muted">Loading…</p></section>
+        <section class="panel"><h2 style="font-size:var(--step-1)">Sensitive content</h2>
+          <label class="switch"><strong>Always blur photos in the community</strong><p>Tap a photo to see it. Posts marked sensitive are always blurred until you choose.</p>
+            <input type="checkbox" id="blur-images" ${state.me.prefs?.blurImages ? 'checked' : ''} /></label></section>
         <section class="panel" id="blocked-panel"><h2 style="font-size:var(--step-1)">Blocked people</h2><p class="muted">Loading…</p></section>
         <section class="panel"><h2 style="font-size:var(--step-1)">Delete account</h2><p>Permanently removes your account and all of the data above. This can't be undone.</p>
           <button class="btn danger" id="del-account">Delete my account</button></section>
@@ -2582,6 +2791,9 @@ VIEWS.privacy = async (main) => {
   });
   renderBlocked();
   renderEmail();
+  $('#blur-images').addEventListener('change', async (e) => {
+    try { state.me.prefs = await api('PUT', '/prefs', { blurImages: e.target.checked }); toast(e.target.checked ? 'Photos will be blurred until you tap them' : 'Photos show normally'); } catch (err) { fail(err); }
+  });
   const dlg = $('#del-dialog');
   $('#del-account').addEventListener('click', () => { $('.form-error', dlg).textContent = ''; dlg.showModal(); });
   $('#del-confirm').addEventListener('click', async (e) => {

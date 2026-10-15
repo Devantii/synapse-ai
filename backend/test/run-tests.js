@@ -816,6 +816,50 @@ const ts = (day, hh) => `${day}T${hh}:00`;
     assert((await api('POST', '/api/auth/login', { username: 'mailer', password: 'brand-new-pass-9' })).status === 200);
   });
 
+  console.log('Community v2: images, sensitive posts, feed filters');
+  await test('images: upload, attach to a post, served by unguessable link', async () => {
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 7)]);
+    const up = await api('POST', '/api/images', { data: 'data:image/jpeg;base64,' + jpeg.toString('base64'), width: 800, height: 600 }, B);
+    assert(up.status === 201 && up.data.url.startsWith('/api/img/'), JSON.stringify(up.data));
+    const fake = await api('POST', '/api/images', { data: 'data:image/png;base64,' + Buffer.from('not an image at all').toString('base64') }, B);
+    assert(fake.status === 400, 'magic bytes checked');
+    assert((await api('POST', '/api/posts', { mood: 'proud', body: 'my desk', images: [up.data.id] }, A)).status === 400, "can't attach someone else's image");
+    const p = await api('POST', '/api/posts', { mood: 'proud', body: 'My study desk today', images: [up.data.id] }, B);
+    assert(p.status === 201, JSON.stringify(p.data));
+    const feed = await api('GET', '/api/posts', null, A);
+    const post = feed.data.posts.find((x) => x.id === p.data.id);
+    assert(post.images.length === 1 && post.images[0].width === 800, JSON.stringify(post.images));
+    const img = await fetch(base + post.images[0].url);
+    assert(img.status === 200 && img.headers.get('content-type') === 'image/jpeg' && (await img.arrayBuffer()).byteLength === jpeg.length);
+    assert((await fetch(base + '/api/img/doesnotexist-doesnotexist')).status === 404);
+    assert((await api('POST', '/api/posts', { mood: 'proud', body: 'reuse', images: [up.data.id] }, B)).status === 400, 'an image belongs to one post');
+  });
+  await test('crisis language: support first, then a blurred post flagged for admins', async () => {
+    const first = await api('POST', '/api/posts', { mood: 'stressed', body: 'honestly I want to die, nothing helps' }, A);
+    assert(first.status === 200 && first.data.needsSupport && first.data.help.some((h) => /14416/.test(h.contact)), JSON.stringify(first.data));
+    const again = await api('POST', '/api/posts', { mood: 'stressed', body: 'honestly I want to die, nothing helps', acknowledgeSupport: true }, A);
+    assert(again.status === 201 && again.data.sensitive === true);
+    const post = (await api('GET', '/api/posts', null, B)).data.posts.find((x) => x.id === again.data.id);
+    assert(post.sensitive && /self-harm/.test(post.cw), 'blurred with a warning');
+    const q = await api('GET', '/api/admin/reports', null, B);
+    assert(q.data.items[0].id === again.data.id && q.data.items[0].urgent, 'urgent in the admin queue');
+    const cw = await api('POST', '/api/posts', { mood: 'tired', body: 'Long rant about exams', sensitive: true, cw: 'Exam stress' }, A);
+    assert((await api('GET', '/api/posts', null, B)).data.posts.find((x) => x.id === cw.data.id).cw === 'Exam stress');
+  });
+  await test('feed: top, mood, search, mine, buddies', async () => {
+    const mine = await api('GET', '/api/posts?scope=mine', null, B);
+    assert(mine.data.posts.length > 0 && mine.data.posts.every((p) => p.isMine));
+    const tired = await api('GET', '/api/posts?mood=tired', null, B);
+    assert(tired.data.posts.length > 0 && tired.data.posts.every((p) => p.mood === 'tired'));
+    const search = await api('GET', '/api/posts?q=STUDY%20DESK', null, A);
+    assert(search.data.posts.length === 1 && /study desk/i.test(search.data.posts[0].body));
+    const top = await api('GET', '/api/posts?sort=top&limit=5', null, A);
+    assert(top.status === 200 && top.data.posts.length <= 5);
+    const buddies = await api('GET', '/api/posts?scope=buddies', null, A);
+    assert(buddies.status === 200 && buddies.data.posts.every((p) => p.author !== 'Anonymous member'));
+    assert((await api('PUT', '/api/prefs', { blurImages: true }, A)).data.blurImages === true);
+  });
+
   console.log('Export + deletion');
   await test('export contains only own data', async () => {
     const r = await api('GET', '/api/export', null, A);

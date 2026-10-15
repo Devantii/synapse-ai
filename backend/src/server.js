@@ -40,7 +40,9 @@ app.use((req, res, next) => {
   res.setHeader('Permissions-Policy', 'microphone=(self), camera=(self), geolocation=()');
   next();
 });
-app.use(express.json({ limit: '100kb' }));
+// Image uploads are larger than ordinary requests; everything else stays capped at 100 kB.
+const bigJson = express.json({ limit: '2.5mb' }), smallJson = express.json({ limit: '100kb' });
+app.use((req, res, next) => (req.method === 'POST' && req.path === '/api/images' ? bigJson : smallJson)(req, res, next));
 
 app.set('io', io);
 app.set('presence', realtime.attach(io));

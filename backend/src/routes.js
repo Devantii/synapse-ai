@@ -156,6 +156,16 @@ post('/auth/google', authLimiter, async (req, res) => {
   res.status(201).json({ ...authReply(user), created: true });
 });
 
+// ---------- images: public by unguessable id (needed for <img> tags) ----------
+router.get('/img/:id', wrap(async (req, res) => {
+  const id = String(req.params.id);
+  if (!/^[A-Za-z0-9_-]{20,40}$/.test(id)) return res.status(404).end();
+  const img = await db.get('SELECT mime, data FROM images WHERE id = ?', [id]);
+  if (!img) return res.status(404).end();
+  res.set({ 'Content-Type': img.mime, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' });
+  res.send(Buffer.from(img.data, 'base64'));
+}));
+
 // ---------- forgot password (public; needs email set up and a confirmed address) ----------
 const resetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false });
 const sha = (x) => crypto.createHash('sha256').update(String(x)).digest('hex');
@@ -531,17 +541,37 @@ get('/stats', async (req, res) => {
 const MOODS = ['calm', 'focused', 'proud', 'tired', 'stressed', 'hopeful'];
 const REACTIONS = ['cheer', 'hug', 'same'];
 
-async function feed(userId, limit, beforeId) {
+/**
+ * Community feed. opts: before (id, for "latest"), offset (for "top"), sort 'latest'|'top' (most supported in
+ * the last 7 days), mood, q (search), scope 'all'|'mine'|'buddies' (named posts by your buddies only).
+ */
+async function feed(userId, limit, beforeId, opts = {}) {
   const vis = safety.visible('p', 'post', userId, { hiddenPosts: true });
   const params = [...vis.params];
   let where = `WHERE ${vis.sql}`;
-  if (beforeId) { where += ' AND p.id < ?'; params.push(beforeId); }
+  if (beforeId && opts.sort !== 'top') { where += ' AND p.id < ?'; params.push(beforeId); }
+  if (opts.mood && MOODS.includes(opts.mood)) { where += ' AND p.mood = ?'; params.push(opts.mood); }
+  if (opts.q) { where += ' AND lower(p.body) LIKE ?'; params.push(`%${String(opts.q).toLowerCase().replace(/[%_]/g, '').slice(0, 60)}%`); }
+  if (opts.scope === 'mine') { where += ' AND p.user_id = ?'; params.push(userId); }
+  if (opts.scope === 'buddies') {
+    where += ` AND COALESCE(c.community_profile, 1) = 1 AND p.user_id IN (
+      SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END FROM buddies WHERE (requester_id = ? OR addressee_id = ?) AND status = 'accepted')`;
+    params.push(userId, userId, userId);
+  }
+  let order = 'ORDER BY p.id DESC';
+  if (opts.sort === 'top') {
+    where += ' AND p.created_at >= ?';
+    params.push(new Date(Date.now() - 7 * 86400000).toISOString().replace('T', ' ').slice(0, 19));
+    order = `ORDER BY ((SELECT COUNT(*) FROM reactions rx WHERE rx.post_id = p.id) + 2 * (SELECT COUNT(*) FROM post_replies pr WHERE pr.post_id = p.id)) DESC, p.id DESC`;
+  }
   params.push(limit);
+  let paging = 'LIMIT ?';
+  if (opts.sort === 'top' && opts.offset) { paging += ' OFFSET ?'; params.push(Math.min(500, Math.max(0, opts.offset))); }
   const rows = await db.all(
-    `SELECT p.id, p.mood, p.body, p.created_at, p.user_id,
+    `SELECT p.id, p.mood, p.body, p.created_at, p.user_id, p.sensitive, p.cw,
             CASE WHEN c.community_profile = 0 THEN 'Anonymous member' ELSE u.display_name END AS author
        FROM posts p JOIN users u ON u.id = p.user_id LEFT JOIN consents c ON c.user_id = p.user_id
-      ${where} ORDER BY p.id DESC LIMIT ?`,
+      ${where} ${order} ${paging}`,
     params
   );
   const ids = rows.map((r) => r.id);
@@ -554,11 +584,14 @@ async function feed(userId, limit, beforeId) {
     : [];
   const replies = ids.length ? await repliesFor(userId, ids) : [];
   const lv = await game.publicLevels(rows.filter((r) => r.author !== 'Anonymous member').map((r) => r.user_id));
+  const imgs = ids.length ? await db.all(`SELECT id, post_id, width, height FROM images WHERE post_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at`, ids) : [];
   return rows.map((p) => {
     const reactions = Object.fromEntries(REACTIONS.map((k) => [k, { count: 0, mine: false }]));
     for (const r of rx) if (r.post_id === p.id) reactions[r.kind] = { count: r.n, mine: !!r.mine };
     const { user_id, ...rest } = p;
-    return { ...rest, isMine: user_id === userId, reactions, level: lv[user_id] || null, replies: replies.filter((r) => r.post_id === p.id).map(({ post_id, ...r }) => r) };
+    return { ...rest, sensitive: !!p.sensitive, isMine: user_id === userId, reactions, level: lv[user_id] || null,
+      images: imgs.filter((i) => i.post_id === p.id).map((i) => ({ url: `/api/img/${i.id}`, width: i.width, height: i.height })),
+      replies: replies.filter((r) => r.post_id === p.id).map(({ post_id, ...r }) => r) };
   });
 }
 
@@ -577,8 +610,39 @@ async function repliesFor(userId, postIds) {
 get('/posts', async (req, res) => {
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
   const before = req.query.before ? parseInt(req.query.before, 10) || null : null;
-  res.json({ posts: await feed(req.user.id, limit, before), moods: MOODS, reactions: REACTIONS });
+  const opts = { sort: req.query.sort === 'top' ? 'top' : 'latest', mood: req.query.mood || null, q: (req.query.q || '').trim() || null,
+    scope: ['mine', 'buddies'].includes(req.query.scope) ? req.query.scope : 'all', offset: parseInt(req.query.offset, 10) || 0 };
+  res.json({ posts: await feed(req.user.id, limit, before, opts), moods: MOODS, reactions: REACTIONS });
 });
+
+// ---------- images (community posts) ----------
+const MAGIC = { 'image/jpeg': [0xff, 0xd8, 0xff], 'image/png': [0x89, 0x50, 0x4e, 0x47], 'image/webp': [0x52, 0x49, 0x46, 0x46] };
+const imageLimiter = rateLimit({ windowMs: 24 * 60 * 60 * 1000, limit: 40, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
+// POST /images { data: "data:image/jpeg;base64,...", width, height } -> { id, url }. Attach to a post within a day.
+post('/images', imageLimiter, async (req, res) => {
+  await notSuspended(req);
+  const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body.data || ''));
+  if (!m) throw new HttpError(400, 'Upload a JPEG, PNG or WebP image.');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 1_600_000) throw new HttpError(413, 'That image is too large (max about 1.5 MB after resizing).');
+  const magic = MAGIC[m[1]];
+  if (!magic.every((b, i) => buf[i] === b) || (m[1] === 'image/webp' && buf.slice(8, 12).toString() !== 'WEBP'))
+    throw new HttpError(400, "That file isn't a valid image.");
+  const id = crypto.randomBytes(18).toString('base64url');
+  const dim = (v) => (Number.isInteger(v) && v > 0 && v <= 4096 ? v : null);
+  await db.run('INSERT INTO images (id, user_id, mime, data, bytes, width, height) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, req.user.id, m[1], m[2], buf.length, dim(req.body.width), dim(req.body.height)]);
+  res.status(201).json({ id, url: `/api/img/${id}` });
+});
+
+// Words that suggest someone may be in crisis (English, Hinglish, Hindi). Not a diagnosis: it only triggers a
+// supportive message to the writer, a blur for readers and an urgent flag for admins.
+const CRISIS = /\b(kill(ing)? myself|suicid(e|al)|end (it all|my life)|want(ed)? to die|wanna die|better off dead|no reason to (live|go on)|self[- ]?harm|hurt(ing)? myself|cut(ting)? myself|marna chaht[aie]|mar jaun|khudkushi|jaan de (du|doon|dunga|dungi))\b|आत्महत्या|मरना चाहत|खुदकुशी/i;
+const HELP = [
+  { name: 'Tele-MANAS (India, free, 24/7)', contact: '14416 or 1-800-891-4416' },
+  { name: 'KIRAN mental health helpline (India)', contact: '1800-599-0019' },
+  { name: 'Emergency', contact: '112' },
+];
 
 const postLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 10, keyGenerator: (req) => String(req.user.id), standardHeaders: true, legacyHeaders: false });
 const notSuspended = async (req) => {
@@ -589,11 +653,26 @@ post('/posts', postLimiter, async (req, res) => {
   const mood = MOODS.includes(req.body.mood) ? req.body.mood : null;
   if (!mood) throw new HttpError(400, 'Pick a mood.');
   const body = text(req.body.body, 'Check-in', 2, 500);
-  const id = await db.insert('INSERT INTO posts (user_id, mood, body) VALUES (?, ?, ?)', [req.user.id, mood, body]);
+  const imageIds = Array.isArray(req.body.images) ? [...new Set(req.body.images.map(String))].slice(0, 5) : [];
+  if (imageIds.length > 4) throw new HttpError(400, 'Up to 4 images per check-in.');
+  if (imageIds.length) {
+    const mine = await db.all(`SELECT id FROM images WHERE user_id = ? AND post_id IS NULL AND id IN (${imageIds.map(() => '?').join(',')})`, [req.user.id, ...imageIds]);
+    if (mine.length !== imageIds.length) throw new HttpError(400, 'Some images are missing. Add them again.');
+  }
+  const crisis = CRISIS.test(body);
+  // Check with the writer first: they see support options and can still post (blurred, flagged for care).
+  if (crisis && !req.body.acknowledgeSupport) return res.status(200).json({ needsSupport: true, help: HELP });
+  const sensitive = crisis || !!req.body.sensitive;
+  const cw = crisis ? 'Mentions self-harm or suicide' : req.body.sensitive ? (req.body.cw ? text(req.body.cw, 'Content warning', 1, 60) : 'Sensitive') : null;
+  const id = await db.insert('INSERT INTO posts (user_id, mood, body, sensitive, cw) VALUES (?, ?, ?, ?, ?)', [req.user.id, mood, body, sensitive ? 1 : 0, cw]);
+  if (imageIds.length) await db.run(`UPDATE images SET post_id = ? WHERE user_id = ? AND id IN (${imageIds.map(() => '?').join(',')})`, [id, req.user.id, ...imageIds]);
+  if (crisis) // urgent item in the admin queue so a person can check in
+    await db.insert("INSERT INTO reports (reporter_id, target_type, target_id, target_user_id, reason, note, snapshot) VALUES (?, 'post', ?, ?, 'selfharm', ?, ?)",
+      [req.user.id, id, req.user.id, 'Automatic: possible crisis language. Consider reaching out kindly.', body.slice(0, 1000)]);
   const out = [];
   await game.grant(req.user.id, 'first_post', out);
   req.app.get('io')?.emit('community:new', { id });
-  res.status(201).json({ id, newMilestones: out });
+  res.status(201).json({ id, newMilestones: out, sensitive, help: crisis ? HELP : undefined });
 });
 
 post('/posts/:id/react', async (req, res) => {
@@ -698,6 +777,7 @@ get('/export', async (req, res) => {
     buddies: await db.all(`SELECT u.display_name AS name, b.status, b.created_at FROM buddies b JOIN users u
       ON u.id = CASE WHEN b.requester_id = ? THEN b.addressee_id ELSE b.requester_id END WHERE b.requester_id = ? OR b.addressee_id = ?`, [id, id, id]),
     cheersReceived: await q('SELECT kind, created_at FROM cheers WHERE to_id = ? ORDER BY id'),
+    images: await q('SELECT id, post_id, mime, bytes, created_at FROM images WHERE user_id = ? ORDER BY created_at'),
     communityReplies: await q('SELECT post_id, body, created_at FROM post_replies WHERE user_id = ? ORDER BY id'),
     connectedDevices: await q('SELECT name, kind, created_at, last_used_at, revoked_at FROM device_tokens WHERE user_id = ? ORDER BY id'),
   };
@@ -709,7 +789,7 @@ const DELETE_SCOPES = {
   activity: ['focus_sessions', 'trees', 'milestones', 'rewards', 'focus_state', 'tasks', 'distractions', 'room_visits', 'rest_days'],
   usage: ['app_usage', 'app_limits'],
   wellbeing: ['mood_checkins'],
-  community: ['posts', 'post_replies', 'reactions', 'room_messages', 'hidden_posts'],
+  community: ['images', 'posts', 'post_replies', 'reactions', 'room_messages', 'hidden_posts'],
 };
 del('/data', async (req, res) => {
   const scope = req.body.scope;
@@ -756,8 +836,8 @@ del('/tasks/:id', async (req, res) => {
 
 // ---------- preferences: daily goal, leaderboard ----------
 async function prefs(userId) {
-  const p = await db.get('SELECT daily_goal_min, leaderboard, weekly_email, tz FROM user_prefs WHERE user_id = ?', [userId]);
-  return { dailyGoalMin: p ? p.daily_goal_min : 120, leaderboard: !!p?.leaderboard, weeklyEmail: !!p?.weekly_email, tz: p?.tz || null };
+  const p = await db.get('SELECT daily_goal_min, leaderboard, weekly_email, tz, blur_images FROM user_prefs WHERE user_id = ?', [userId]);
+  return { dailyGoalMin: p ? p.daily_goal_min : 120, leaderboard: !!p?.leaderboard, weeklyEmail: !!p?.weekly_email, tz: p?.tz || null, blurImages: !!p?.blur_images };
 }
 get('/prefs', async (req, res) => res.json(await prefs(req.user.id)));
 put('/prefs', async (req, res) => {
@@ -765,13 +845,14 @@ put('/prefs', async (req, res) => {
   const goal = req.body.dailyGoalMin !== undefined ? Math.min(720, Math.max(15, parseInt(req.body.dailyGoalMin, 10) || 120)) : cur.dailyGoalMin;
   const lb = req.body.leaderboard !== undefined ? !!req.body.leaderboard : cur.leaderboard;
   const we = req.body.weeklyEmail !== undefined ? !!req.body.weeklyEmail : cur.weeklyEmail;
+  const blur = req.body.blurImages !== undefined ? !!req.body.blurImages : cur.blurImages;
   let tz = cur.tz;
   if (req.body.tz !== undefined) {
     try { new Intl.DateTimeFormat('en-US', { timeZone: String(req.body.tz) }); tz = String(req.body.tz).slice(0, 64); } catch { throw new HttpError(400, 'Unknown time zone.'); }
   }
-  await db.run(`INSERT INTO user_prefs (user_id, daily_goal_min, leaderboard, weekly_email, tz) VALUES (?, ?, ?, ?, ?)
+  await db.run(`INSERT INTO user_prefs (user_id, daily_goal_min, leaderboard, weekly_email, tz, blur_images) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT (user_id) DO UPDATE SET daily_goal_min = excluded.daily_goal_min, leaderboard = excluded.leaderboard,
-      weekly_email = excluded.weekly_email, tz = excluded.tz`, [req.user.id, goal, lb ? 1 : 0, we ? 1 : 0, tz]);
+      weekly_email = excluded.weekly_email, tz = excluded.tz, blur_images = excluded.blur_images`, [req.user.id, goal, lb ? 1 : 0, we ? 1 : 0, tz, blur ? 1 : 0]);
   res.json(await prefs(req.user.id));
 });
 
